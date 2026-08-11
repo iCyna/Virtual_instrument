@@ -1,0 +1,17 @@
+buildozer
+plyer
+pycryptodome
+cryptography
+polib
+pyuepak
+libloader
+platform-utils
+pygame
+pyinstaller
+pywin32
+pywin32-ctypes
+requests
+urllib3
+winpaths
+wxPython
+zstandard

@@ -1,0 +1,8 @@
+# -*- coding: utf-8 -*-
+#compile to exe
+inv
+Musical_instrument_virtual
+["--noconsole", "--onefile"]
+["collections", "sf2toolkit"]
+open.exe
+0
