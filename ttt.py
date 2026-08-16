@@ -11,11 +11,11 @@ w.init(10,10,"gold wave music")
 w.say(str(time.time()-t))
 o=output()
 o.device=4
-path="e:/sounds mw"
+path="e:/skill"
 l=os.listdir(path)
 name = ""
-fxx="city"
-index=2000
+fxx=""
+index=20
 s=sound()
 s.load(path+"/"+l[index])
 def fxmenu(style):
@@ -38,11 +38,12 @@ while True:
 		w.say(l[index])
 		if s and s.playing: s.stop()
 		s=sound()
-		s.stream(path+"/"+l[index])
-		s.setfx(fxx)
-		#s.set3d(0,0,0,0,0,0)
-		s.play()
-
+		try:
+			s.stream(path+"/"+l[index])
+			s.setfx(fxx)
+			#s.set3d(0,0,0,0,0,0)
+			s.play()
+		except:pass
 		name=l[index]
 	if w.keyPressing(k.up.value, t=180) and index >0: index -=1
 	if w.keyPressing(k.down.value, t=180) and index < len(l): index +=1
@@ -51,4 +52,6 @@ while True:
 		style="fxs"
 		if w.keyPressing("lshift"): style="filters"
 		trx=fxmenu(style)
-		if trx: s.setfx(trx);w.say(f"applied {trx} effect");fxx=trx
+		if trx:
+			s.remove_all_fx()
+			s.setfx(trx);w.say(f"applied {trx} effect");fxx=trx

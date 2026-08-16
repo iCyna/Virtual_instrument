@@ -1,9 +1,0 @@
-pycriptodome
-cryptography
-pygame
-pyinstaller
-winpaths
-wxPython
-zstandard
-plyer
-libloader
