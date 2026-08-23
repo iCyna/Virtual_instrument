@@ -4,13 +4,16 @@ from pyaudiogaming.sound_pool import input, output
 from pyaudiogaming import vb
 def load(w):
 	import pyaudiogaming.file as pf
+	loads=core.config
 	core.frame=w
 	core.getW().fp=600
 	core.getW().exit_callback=sys.exit
 	f=pf.File(password="config key", encode=True, aes=True)
 	if f.check("settings.tl"):
-		core.config =f.load("settings.tl", mode="rb+", type="json")
-		print(core.config)
+		loads =f.load("settings.tl", mode="rb+", type="json")
+		for x,y in config.items():
+			if x not in loads: loads[x]=y
+	config=loads
 	core.input = input()
 	core.output = output(bbuffer=50)
 	core.input.device, core.output.device, = core.config.get("input device", -1), core.config.get("output device", -1)
