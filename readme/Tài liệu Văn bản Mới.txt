@@ -1,0 +1,33 @@
+======================================================
+         DRUM SEQUENCER - USER MANUAL & SYNTAX
+======================================================
+
+1. GENERAL SYNTAX
+Format: MIDICode-Duration-Velocity
+Example: 36-1-127
+- MIDICode: Standard General MIDI (GM) percussion number.
+- Duration: Beat length before the next event (e.g., 0.5 = 8th note).
+- Velocity: Hit strength (0-127). Crucial for dynamic drumming.
+
+2. COMMON GENERAL MIDI DRUM MAP
+- 36: Bass Drum (Kick 1)
+- 38: Acoustic Snare
+- 42: Closed Hi-Hat
+- 46: Open Hi-Hat
+- 49: Crash Cymbal 1
+- 51: Ride Cymbal 1
+- 43: High Tom
+- 45: Low Tom
+
+3. MULTIPLE HITS (SIMULTANEOUS)
+Enclose drum codes in brackets '[...]' to hit them exactly at the same time.
+- Kick + Crash: [36,49]-1-127
+- Snare + Hi-hat: [38,42]-0.5-100
+
+4. GHOST NOTES & ACCENTS
+Manipulate the Velocity parameter to create realistic human grooves.
+- Accent (Hard hit): 38-1-127
+- Ghost Note (Soft tap): 38-0.25-30
+
+5. EXAMPLE SEQUENCE (Standard Rock Groove)
+[36,42]-0.5-110 42-0.5-70 [38,42]-0.5-120 42-0.5-70 [36,42]-0.5-110 [36,42]-0.5-90 [38,42]-0.5-120 42-0.5-70

@@ -11,9 +11,9 @@ def load(w):
 	f=pf.File(password="config key", encode=True, aes=True)
 	if f.check("settings.tl"):
 		loads =f.load("settings.tl", mode="rb+", type="json")
-		for x,y in config.items():
+		for x,y in core.config.items():
 			if x not in loads: loads[x]=y
-	config=loads
+	core.config=loads
 	core.input = input()
 	core.output = output(bbuffer=50)
 	core.input.device, core.output.device, = core.config.get("input device", -1), core.config.get("output device", -1)

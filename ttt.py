@@ -39,7 +39,8 @@ while True:
 		if s and s.playing: s.stop()
 		s=sound()
 		try:
-			s.stream(path+"/"+l[index])
+			s.stream(path+"/"+l[index], mono=True)
+			#s.set_tone(0)
 			s.setfx(fxx)
 			#s.set3d(0,0,0,0,0,0)
 			s.play()

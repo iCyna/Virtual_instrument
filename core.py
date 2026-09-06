@@ -1,5 +1,5 @@
 import sys
-import guitar, piano, drums
+import guitar, piano, drums, mte
 import setting
 import pyaudiogaming.system as system
 frame=None
@@ -39,5 +39,6 @@ menus={
 	"Piano": piano,
 	"Guitar": guitar,
 	"drums": drums,
+	"Music Tracker Editor": mte,
 	"Settings": setting,
 }
