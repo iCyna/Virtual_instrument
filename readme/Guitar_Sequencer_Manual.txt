@@ -1,27 +1,17 @@
-======================================================
-        GUITAR SEQUENCER - USER MANUAL & SYNTAX
-======================================================
+==================================================
+TITLE: MTE - GUITAR SEQUENCER FULL EXAMPLE & GUIDE
+==================================================
 
-1. GENERAL SYNTAX
-Format: Note-Duration-Velocity
-Example: E3-1-100
-- Similar to Piano, uses standard notation (C, C#, Db) and octaves (e.g., E2 to E5).
-- Supports omitting values for default duration (1) and velocity (100).
+GENERAL SYNTAX
+- Format: Note-Duration-Velocity (Example: E3-1-100)[cite: 6].
+- Similar to Piano, it uses standard notation (C, C#, Db) and octaves (e.g., E2 to E5)[cite: 6].
+- Supports omitting values for default duration (1) and velocity (100)[cite: 6].
+- Rests (Silence): Use 'R' to insert a silent gap, such as R-1 to rest for 1 beat[cite: 6].
 
-2. ADVANCED CHORD STRUMMING (EXCLUSIVE TO GUITAR)
-Use special prefix symbols outside the bracket to simulate pick direction:
-- Down-strum (~): Plays notes sequentially from lowest to highest string (20ms delay per string).
-  Syntax: ~[E2,B2,E3,G#3,B3,E4]-1-100
-- Up-strum (^): Plays notes sequentially from highest to lowest string (reverse order).
-  Syntax: ^[E2,B2,E3,G#3,B3,E4]-1-90
+ADVANCED CHORD STRUMMING & PLUCKING
+- Down-strum (~): Use this prefix outside the bracket to play notes sequentially from lowest to highest string with a 20ms delay per string[cite: 6]. Syntax: ~[E2,B2,E3,G#3,B3,E4]-1-100[cite: 6].
+- Up-strum (^): Use this prefix outside the bracket to play notes sequentially from highest to lowest string in reverse order[cite: 6]. Syntax: ^[E2,B2,E3,G#3,B3,E4]-1-90[cite: 6].
+- Plucking (Arpeggio): Input single notes consecutively[cite: 6]. Example: E2-0.5-100 B2-0.5-90 E3-0.5-85 G#3-0.5-80[cite: 6].
 
-3. PLUCKING (ARPEGGIO)
-Just input single notes consecutively.
-- Example: E2-0.5-100 B2-0.5-90 E3-0.5-85 G#3-0.5-80
-
-4. RESTS (SILENCE)
-Use 'R' to insert a silent gap.
-- Example: R-1 (Rest for 1 beat).
-
-5. EXAMPLE SEQUENCE (Strumming Pattern)
-~[C3,E3,G3,C4,E4]-1-100 ~[C3,E3,G3,C4,E4]-0.5-80 ^[C3,E3,G3,C4,E4]-0.5-90
+EXAMPLE SEQUENCE (Strumming Pattern)
+Code: ~[C3,E3,G3,C4,E4]-1-100 ~[C3,E3,G3,C4,E4]-0.5-80 ^[C3,E3,G3,C4,E4]-0.5-90[cite: 6]

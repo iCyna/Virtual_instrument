@@ -6,7 +6,7 @@ def load(w):
 	import pyaudiogaming.file as pf
 	loads=core.config
 	core.frame=w
-	core.getW().fp=600
+	core.getW().fp=3690
 	core.getW().exit_callback=sys.exit
 	f=pf.File(password="config key", encode=True, aes=True)
 	if f.check("settings.tl"):

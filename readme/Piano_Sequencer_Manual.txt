@@ -1,31 +1,15 @@
-======================================================
-         PIANO SEQUENCER - USER MANUAL & SYNTAX
-======================================================
+--- PIANO FULL EXAMPLE & USAGE ---
+Goal: Play a C Major chord for 2 beats, then an F Major chord for 2 beats.
 
-1. GENERAL SYNTAX
-Format: Note-Duration-Velocity
-Example: C4-1-100
-- Note: The musical note and its octave (e.g., C4, D#5, Bb3).
-- Duration: Length of the note in beats (e.g., 1 = one beat, 0.5 = half beat). Default is 1 if omitted.
-- Velocity: Striking force from 0 to 127 (e.g., 120 = hard, 60 = soft). Default is 100 if omitted.
+1. SEQUENCE CODE:
+[C4,E4,G4]-2-100 [F4,A4,C5]-2-100
 
-2. SHARPS & FLATS
-- Sharps (#): Place '#' after the note letter (e.g., C#4, F#5).
-- Flats (b/B): Place 'b' or 'B' after the note letter (e.g., Eb4, Bb3).
+2. EXPLANATION:
+- Standard musical pitches are used and wrapped in brackets `[]` to form chords[cite: 1].
+- The sequence strictly follows the Note-Beat-Velocity format[cite: 1].
+- `[C4,E4,G4]-2-100` plays the C Major chord for exactly 2 beats at a velocity of 100[cite: 1].
 
-3. CHORDS & INVERSIONS
-Enclose multiple notes in brackets '[...]' separated by commas.
-- Root Chord: [C4,E4,G4]-2-90
-- Inversions (Change the lowest note): [E4,G4,C5]-2-90
-
-4. RESTS (SILENCE)
-Use 'R' to insert a silent gap.
-- Example: R-0.5 (Rest for half a beat).
-
-5. FALLBACK BEHAVIOR (NO CRASH)
-- C4         -> Translates to C4-1.0-100
-- C4-0.5     -> Translates to C4-0.5-100
-- [C4,E4]-2  -> Translates to [C4,E4]-2.0-100
-
-6. EXAMPLE SEQUENCE (Arpeggio)
-C4-0.5-60 E4-0.5-70 G4-0.5-80 C5-0.5-100 B4-0.5-90 G4-0.5-75 D4-0.5-60
+3. HOW TO USE IN MTE:
+- Open the "Advanced Step Sequencer (Notes/Chords)" menu[cite: 1].
+- Select "Piano"[cite: 1].
+- Paste the sequence code above and press Enter. The tracker will render it in the background[cite: 1].

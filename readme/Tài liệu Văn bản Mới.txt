@@ -1,33 +1,25 @@
-======================================================
-         DRUM SEQUENCER - USER MANUAL & SYNTAX
-======================================================
+==================================================
+TITLE: MTE - DRUM SEQUENCER FULL EXAMPLE & GUIDE
+==================================================
 
-1. GENERAL SYNTAX
-Format: MIDICode-Duration-Velocity
-Example: 36-1-127
-- MIDICode: Standard General MIDI (GM) percussion number.
-- Duration: Beat length before the next event (e.g., 0.5 = 8th note).
-- Velocity: Hit strength (0-127). Crucial for dynamic drumming.
+GENERAL SYNTAX
+- Format: MIDICode-Duration-Velocity (Example: 36-1-127)[cite: 8].
+- MIDICode: Standard General MIDI (GM) percussion number[cite: 8].
+- Duration: Beat length before the next event (e.g., 0.5 = 8th note)[cite: 8].
+- Velocity: Hit strength (0-127), which is crucial for dynamic drumming[cite: 8].
 
-2. COMMON GENERAL MIDI DRUM MAP
-- 36: Bass Drum (Kick 1)
-- 38: Acoustic Snare
-- 42: Closed Hi-Hat
-- 46: Open Hi-Hat
-- 49: Crash Cymbal 1
-- 51: Ride Cymbal 1
-- 43: High Tom
-- 45: Low Tom
+DRUM PRINCIPLES & USAGE
+- Common General MIDI Drum Map[cite: 8]:
+  * 36: Bass Drum (Kick 1)[cite: 8]
+  * 38: Acoustic Snare[cite: 8]
+  * 42: Closed Hi-Hat[cite: 8]
+  * 43: High Tom[cite: 8]
+  * 45: Low Tom[cite: 8]
+  * 46: Open Hi-Hat[cite: 8]
+  * 49: Crash Cymbal 1[cite: 8]
+  * 51: Ride Cymbal 1[cite: 8]
+- Multiple Hits (Simultaneous): Enclose drum codes in brackets '[...]' to hit them exactly at the same time[cite: 8]. Example: Kick + Crash is [36,49]-1-127, and Snare + Hi-hat is [38,42]-0.5-100[cite: 8].
+- Ghost Notes & Accents: Manipulate the Velocity parameter to create realistic human grooves[cite: 8]. An Accent (Hard hit) is 38-1-127, and a Ghost Note (Soft tap) is 38-0.25-30[cite: 8].
 
-3. MULTIPLE HITS (SIMULTANEOUS)
-Enclose drum codes in brackets '[...]' to hit them exactly at the same time.
-- Kick + Crash: [36,49]-1-127
-- Snare + Hi-hat: [38,42]-0.5-100
-
-4. GHOST NOTES & ACCENTS
-Manipulate the Velocity parameter to create realistic human grooves.
-- Accent (Hard hit): 38-1-127
-- Ghost Note (Soft tap): 38-0.25-30
-
-5. EXAMPLE SEQUENCE (Standard Rock Groove)
-[36,42]-0.5-110 42-0.5-70 [38,42]-0.5-120 42-0.5-70 [36,42]-0.5-110 [36,42]-0.5-90 [38,42]-0.5-120 42-0.5-70
+EXAMPLE SEQUENCE (Standard Rock Groove)
+Code: [36,42]-0.5-110 42-0.5-70 [38,42]-0.5-120 42-0.5-70 [36,42]-0.5-110 [36,42]-0.5-90 [38,42]-0.5-120 42-0.5-70[cite: 8]
