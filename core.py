@@ -14,6 +14,16 @@ config={
 	"guitar musical toolkit": system.match("sf2toolkit/Acoustic Guitars JNv2.4.sf2"),
 	"piano musical toolkit": system.match("sf2toolkit/GeneralUserGS-v1471.sf2"),
 	"drum musical toolkit": system.match("sf2toolkit/GeneralUserGS-v1471.sf2"),
+	"bass musical toolkit": system.match("sf2toolkit/GeneralUserGS-v1471.sf2"),
+	"electronic drum musical toolkit": system.match("sf2toolkit/GeneralUserGS-v1471.sf2"),
+	"strings musical toolkit": system.match("sf2toolkit/Strings.sf2"), # Thêm Strings,
+	"synth musical toolkit": system.match("sf2toolkit/Synth.sf2"),     # Thêm Synth
+	"flute musical toolkit": system.match("sf2toolkit/Flute.sf2"),     # Thêm Sáo,
+	"bass tools": 32,
+	"electronic drum": 0,
+	"strings": 48,
+"synth": 81,
+	"flute": 73,
 	"guitar tools": 3,
 }
 

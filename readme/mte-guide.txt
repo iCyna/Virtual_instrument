@@ -1,0 +1,30 @@
+Music Tracker Editor (MTE)
+
+When you run "inv.exe" use keys arrow up and down to see something and select Music Tracker Editor. you also can try some musical toolkit.
+on the interface showd: press backspace to open tools bar. Here you can see many options and where you can saw Arranger & Beat Studio (I).
+
+some basic functions and keys here:
+select from start point (q)
+select from end point (e)
+select all (ctrl +a)
+cut in selected point (ctrl+x)
+copy in selected point (ctrl+c)
+paste from start point (ctrl+v)
+mix(mix from temporary memory you was copy from somewhere: "track, select point") (ctrl+m)
+new track (ctrl+n)
+delete a track (ctrl+f4)
+switch between tracks (ctrl+tab or ctrl+shift+tab)
+play or stop on a track (space)
+undo (ctrl+z)
+
+redo (ctrl+y)
+to switch between some values (tab or shift+tab)
+to slide a value (left arrow or right arrow)
+
+you also can change something in settings (main menu when you ran inv.exe)
+
+Note: This tool is intended solely for exploring music and is not intended for high-level music production due to its lack of music design features. I myself am not a professional in the music production industry, so please don't criticize it if you find it boring.
+
+------
+	Thank you for using this toolkit.
+------

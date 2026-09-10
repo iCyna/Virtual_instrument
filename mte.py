@@ -124,7 +124,8 @@ def mix_pcm_buffers(base_data, overlay_data, offset_bytes=0, overlay_volume=1.0)
 
 def parse_single_note(note_str, inst_type):
     note_str = note_str.strip().upper()
-    if inst_type == "drum":
+    # Mọi nhạc cụ có chữ "drum" đều được đối xử như bộ gõ (nhập số thay vì nốt nhạc)
+    if "drum" in inst_type:
         return int(note_str) if note_str.isdigit() else -1
         
     match = re.match(r"([A-G][#B]?)(\d)", note_str)
@@ -246,7 +247,15 @@ class BackgroundMixerTask(threading.Thread):
                     loaded_font = inst.load_font(self.sf2_path)
                 inst.set_fonts(loaded_font)
             
-            chan = 9 if self.inst_type == "drum" else 0
+            # Gán bộ gõ vào Channel 9
+            chan = 9 if "drum" in self.inst_type else 0
+            
+            # Khớp quy ước đặt tên để kéo chuẩn xác ID từ core.config
+            id_key = f"{self.inst_type} tools" if self.inst_type in ["guitar", "bass"] else self.inst_type
+            program_id = core.config.get(id_key, 0)
+            
+            # Gửi lệnh đổi tiếng (Dù là trống ở kênh 9 vẫn gửi để hỗ trợ chuyển kit nếu cần)
+            inst.send_event(chan, 2, int(program_id))
             
             event_idx = 0
             num_events = len(self.events)
@@ -649,8 +658,8 @@ class MusicTrackerEditor:
 
         m = menu.menu()
         m.init(self.w, "Select Target Format")
-        m.append("Piano / Guitar")
-        m.append("Drums")
+        m.append("Pitched Instruments (Piano/Guitar/Bass/Strings/Synth...)")
+        m.append("Drums / Electronic Drums")
         m.append("Cancel")
         m.open()
         
@@ -753,7 +762,7 @@ class MusicTrackerEditor:
             NAMES = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B']
             
             def note_to_str(n, inst): 
-                return str(n) if inst == "drum" else f"{NAMES[n % 12]}{(n // 12) - 1}"
+                return str(n) if "drum" in inst else f"{NAMES[n % 12]}{(n // 12) - 1}"
                 
             result = []
             
@@ -811,9 +820,10 @@ class MusicTrackerEditor:
     def open_step_sequencer(self):
         m = menu.menu()
         m.init(self.w, "Select Instrument")
-        m.append("Piano")
-        m.append("Guitar")
-        m.append("Drums")
+        
+        display_names = ["Piano", "Guitar", "Bass", "Strings", "Synth", "Flute", "Drums", "Electronic Drums"]
+        for inst in display_names:
+            m.append(inst)
         m.append("Back")
         m.open()
         
@@ -821,18 +831,20 @@ class MusicTrackerEditor:
             self.w.frameUpdate()
             sel = m.frameUpdate()
             if sel is None: continue
-            if sel == -1 or sel == 3: return
-            self.run_step_sequencer({0: "piano", 1: "guitar", 2: "drum"}[sel])
+            if sel == -1 or sel == len(display_names): return
+            
+            inst_keys = ["piano", "guitar", "bass", "strings", "synth", "flute", "drum", "electronic drum"]
+            self.run_step_sequencer(inst_keys[sel])
             break
 
     def run_step_sequencer(self, inst_type):
         msg = "Type '*clip' to paste from clipboard.\n"
         msg += "Strumming: ~[C3,E3] (down), ^[C3,E3] (up)\n" if inst_type == "guitar" else ""
         msg += ("Syntax: Note-Beat-Velocity (e.g., Eb4-1-120 [E4,G4,C5]-0.5 R-1):" 
-                if inst_type != "drum" else 
+                if "drum" not in inst_type else 
                 "Drum Syntax: Code-Beat-Velocity (e.g., 36-1-127 38-1-50 [36,42]-0.5):")
                
-        seq_str = kbt(None, f"{inst_type.capitalize()} Sequencer", msg, "")
+        seq_str = kbt(None, f"{inst_type.title()} Sequencer", msg, "")
         if not seq_str: return
 
         if seq_str.strip().lower() == "*clip":
