@@ -25,7 +25,7 @@ except ImportError:
 import core
 from pyaudiogaming import menu
 from pyaudiogaming.inputBox import kbt
-from pyaudiogaming.sound_pool import sound, musical
+from pyaudiogaming.sound_pool import sound, musical, playsingle
 from pyaudiogaming import sound_pool
 from pyaudiogaming.sound_lib.instrument import MIDIStream
 
@@ -236,7 +236,10 @@ class BackgroundMixerTask(threading.Thread):
             if is_vst:
                 from pyaudiogaming.sound_pool import vst
                 inst = vst()
-                inst.create_instrument(inst_config["vst_path"], frequency=SAMPLE_RATE)
+                success = inst.create_instrument(inst_config["vst_path"], frequency=SAMPLE_RATE, flags=0x200000)
+                if not success:
+                    self.app.announce("Lỗi: Không thể nạp VST. Đảm bảo DLL tương thích kiến trúc.")
+                    return
                 if inst_config.get("vst_chunk"):
                     inst.set_chunk(inst_config["vst_chunk"])
             else:
@@ -266,12 +269,14 @@ class BackgroundMixerTask(threading.Thread):
                     ev_bytes = ms_to_bytes(self.events[event_idx][0])
                     if ev_bytes <= current_bytes:
                         ev = self.events[event_idx]
+                        
                         param = ev[2] | (ev[3] << 8) if ev[1] == "on" else ev[2] | (0 << 8)
                         
                         if is_vst:
                             inst.send_midi(chan, 1, param)
                         else:
                             inst.send_event(chan, 1, param)
+                        
                         event_idx += 1
                     else:
                         break
@@ -675,148 +680,173 @@ class MusicTrackerEditor:
             break
             
         self.announce("Extracting MIDI. Tracking timing, pedal, and scaling timbre to Forte...")
-        try:
-            mid = mido.MidiFile(filepath)
-            notes = []
-            
-            active_notes = {i: {} for i in range(16)}
-            pedal_held_notes = {i: [] for i in range(16)}
-            current_vol = {i: 127 for i in range(16)}
-            current_exp = {i: 127 for i in range(16)}
-            pedal_down = {i: False for i in range(16)}
-            soft_pedal_down = {i: False for i in range(16)}
-            
-            current_time_sec = 0.0
-            
-            for msg in mid:
-                self.w.frameUpdate() 
-                current_time_sec += msg.time 
+        
+        extraction_done = False
+        extracted_seq_str = ""
+        extraction_error = False
+        shared_progress = 0  
+      
+        def extraction_worker():
+            nonlocal extraction_done, extracted_seq_str, extraction_error, shared_progress
+            try:
+                mid = mido.MidiFile(filepath)
+                notes = []
                 
-                if hasattr(msg, 'channel'):
-                    ch = msg.channel
+                active_notes = {i: {} for i in range(16)}
+                pedal_held_notes = {i: [] for i in range(16)}
+                current_vol = {i: 127 for i in range(16)}
+                current_exp = {i: 127 for i in range(16)}
+                pedal_down = {i: False for i in range(16)}
+                soft_pedal_down = {i: False for i in range(16)}
+                
+                current_time_sec = 0.0
+                total_length = mid.length if mid.length > 0 else 1.0
+                
+                for msg in mid:
+                    current_time_sec += msg.time
+                    percent = int((current_time_sec / total_length) * 100)
+                    shared_progress = min(100, max(0, percent))
                     
-                    if msg.type == 'control_change':
-                        if msg.control == 7:
-                            current_vol[ch] = msg.value
-                        elif msg.control == 11:
-                            current_exp[ch] = msg.value
-                        elif msg.control == 64:
-                            if msg.value >= 64 and not pedal_down[ch]:
-                                pedal_down[ch] = True
-                            elif msg.value < 64 and pedal_down[ch]:
-                                pedal_down[ch] = False
-                                for n_info in pedal_held_notes[ch]:
+                    if hasattr(msg, 'channel'):
+                        ch = msg.channel
+                        
+                        if msg.type == 'control_change':
+                            if msg.control == 7:
+                                current_vol[ch] = msg.value
+                            elif msg.control == 11:
+                                current_exp[ch] = msg.value
+                            elif msg.control == 64:
+                                if msg.value >= 64 and not pedal_down[ch]:
+                                    pedal_down[ch] = True
+                                elif msg.value < 64 and pedal_down[ch]:
+                                    pedal_down[ch] = False
+                                    for n_info in pedal_held_notes[ch]:
+                                        notes.append({
+                                            'start': n_info['start'],
+                                            'end': current_time_sec,
+                                            'note': n_info['note'],
+                                            'vel': n_info['vel']
+                                        })
+                                    pedal_held_notes[ch].clear()
+                            elif msg.control == 67:
+                                soft_pedal_down[ch] = msg.value >= 64
+                                    
+                        elif msg.type == 'note_on' and msg.velocity > 0:
+                            if msg.note not in active_notes[ch]:
+                                active_notes[ch][msg.note] = []
+                                
+                            soft_multiplier = 0.7 if soft_pedal_down[ch] else 1.0
+                            baked_vel = msg.velocity * (current_vol[ch] / 127.0) * (current_exp[ch] / 127.0) * soft_multiplier
+                            
+                            active_notes[ch][msg.note].append({
+                                'start': current_time_sec, 
+                                'vel': baked_vel,
+                                'note': msg.note
+                            })
+                            
+                        elif msg.type == 'note_off' or (msg.type == 'note_on' and msg.velocity == 0):
+                            if msg.note in active_notes[ch] and len(active_notes[ch][msg.note]) > 0:
+                                note_info = active_notes[ch][msg.note].pop(0)
+                                
+                                if pedal_down[ch]:
+                                    pedal_held_notes[ch].append(note_info)
+                                else:
                                     notes.append({
-                                        'start': n_info['start'],
-                                        'end': current_time_sec,
-                                        'note': n_info['note'],
-                                        'vel': n_info['vel']
+                                        'start': note_info['start'], 
+                                        'end': current_time_sec, 
+                                        'note': note_info['note'], 
+                                        'vel': note_info['vel']
                                     })
-                                pedal_held_notes[ch].clear()
-                        elif msg.control == 67:
-                            soft_pedal_down[ch] = msg.value >= 64
-                                
-                    elif msg.type == 'note_on' and msg.velocity > 0:
-                        if msg.note not in active_notes[ch]:
-                            active_notes[ch][msg.note] = []
-                            
-                        soft_multiplier = 0.7 if soft_pedal_down[ch] else 1.0
-                        baked_vel = msg.velocity * (current_vol[ch] / 127.0) * (current_exp[ch] / 127.0) * soft_multiplier
-                        
-                        active_notes[ch][msg.note].append({
-                            'start': current_time_sec, 
-                            'vel': baked_vel,
-                            'note': msg.note
-                        })
-                        
-                    elif msg.type == 'note_off' or (msg.type == 'note_on' and msg.velocity == 0):
-                        if msg.note in active_notes[ch] and len(active_notes[ch][msg.note]) > 0:
-                            note_info = active_notes[ch][msg.note].pop(0)
-                            
-                            if pedal_down[ch]:
-                                pedal_held_notes[ch].append(note_info)
-                            else:
-                                notes.append({
-                                    'start': note_info['start'], 
-                                    'end': current_time_sec, 
-                                    'note': note_info['note'], 
-                                    'vel': note_info['vel']
-                                })
-                                
-            for ch in range(16):
-                for n_info in pedal_held_notes[ch]:
-                    notes.append({
-                        'start': n_info['start'],
-                        'end': current_time_sec,
-                        'note': n_info['note'],
-                        'vel': n_info['vel']
-                    })
-                for note_list in active_notes[ch].values():
-                    for n_info in note_list:
+                                    
+                for ch in range(16):
+                    for n_info in pedal_held_notes[ch]:
                         notes.append({
                             'start': n_info['start'],
                             'end': current_time_sec,
                             'note': n_info['note'],
                             'vel': n_info['vel']
                         })
-                        
-            notes.sort(key=lambda x: x['start'])
-            NAMES = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B']
-            
-            def note_to_str(n, inst): 
-                return str(n) if "drum" in inst else f"{NAMES[n % 12]}{(n // 12) - 1}"
+                    for note_list in active_notes[ch].values():
+                        for n_info in note_list:
+                            notes.append({
+                                'start': n_info['start'],
+                                'end': current_time_sec,
+                                'note': n_info['note'],
+                                'vel': n_info['vel']
+                            })
+                            
+                notes.sort(key=lambda x: x['start'])
+                NAMES = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B']
                 
-            result = []
-            
-            max_v = max((n['vel'] for n in notes), default=1)
-            vol_multiplier = 95.0 / max_v if max_v > 0 else 1.0
+                def note_to_str(n, inst): 
+                    return str(n) if "drum" in inst else f"{NAMES[n % 12]}{(n // 12) - 1}"
+                    
+                result = []
+                max_v = max((n['vel'] for n in notes), default=1)
+                vol_multiplier = 95.0 / max_v if max_v > 0 else 1.0
+                    
+                for n in notes:
+                    start_ms = int(round(n['start'] * 1000))
+                    dur_ms = int(round((n['end'] - n['start']) * 1000))
+                    if dur_ms <= 0: dur_ms = 10
+                    
+                    note_str = note_to_str(n['note'], inst_choice)
+                    final_vel = int(round(n['vel'] * vol_multiplier))
+                    final_vel = max(1, min(127, final_vel))
+                    
+                    result.append(f"{note_str}@{start_ms}-{dur_ms}-{final_vel}")
+                    
+                extracted_seq_str = " ".join(result)
+                extraction_done = True
                 
-            for n in notes:
-                self.w.frameUpdate()
-                
-                start_ms = int(round(n['start'] * 1000))
-                dur_ms = int(round((n['end'] - n['start']) * 1000))
-                
-                if dur_ms <= 0: dur_ms = 10
-                
-                note_str = note_to_str(n['note'], inst_choice)
-                
-                final_vel = int(round(n['vel'] * vol_multiplier))
-                final_vel = max(1, min(127, final_vel))
-                
-                result.append(f"{note_str}@{start_ms}-{dur_ms}-{final_vel}")
-                
-            seq_str = " ".join(result)
-            
-            m2 = menu.menu()
-            m2.init(self.w, "Extraction Complete")
-            m2.append("Copy to Clipboard")
-            m2.append("Export to collections/mte-mids")
-            m2.append("Discard")
-            m2.open()
-            
-            while True:
-                self.w.frameUpdate()
-                sel = m2.frameUpdate()
-                if sel is None: continue
-                if sel == -1 or sel == 2: break
-                
-                if sel == 0:
-                    success = set_clipboard_text(seq_str)
-                    self.announce("Copied to clipboard!" if success else "Failed to copy. Pyperclip missing.")
-                    break
-                elif sel == 1:
-                    export_dir = "collections/mte-mids"
-                    os.makedirs(export_dir, exist_ok=True)
-                    base_name = os.path.basename(filepath)
-                    out_file = os.path.join(export_dir, os.path.splitext(base_name)[0] + ".txt")
-                    with open(out_file, "w", encoding="utf-8") as f: f.write(seq_str)
-                    self.announce(f"Exported to {out_file}")
-                    break
+            except Exception as e:
+                print(e)
+                extraction_error = True
+                extraction_done = True
 
-        except Exception as e:
+        worker = threading.Thread(target=extraction_worker)
+        worker.daemon = True
+        worker.start()
+
+        last_played_percent = -1
+        while not extraction_done:
+            self.w.frameUpdate()
+            if shared_progress > last_played_percent:
+                playsingle("collections/audio/progress.ogg", pitch = 15 + (shared_progress * 5))
+                last_played_percent = shared_progress
+            time.sleep(0.01)
+                   
+        if extraction_error:
             self.announce("Error extracting MIDI")
-            print(e)
+            return
+
+        seq_str = extracted_seq_str
+
+        m2 = menu.menu()
+        m2.init(self.w, "Extraction Complete")
+        m2.append("Copy to Clipboard")
+        m2.append("Export to collections/mte-mids")
+        m2.append("Discard")
+        m2.open()
+        
+        while True:
+            self.w.frameUpdate()
+            sel = m2.frameUpdate()
+            if sel is None: continue
+            if sel == -1 or sel == 2: break
+            
+            if sel == 0:
+                success = set_clipboard_text(seq_str)
+                self.announce("Copied to clipboard!" if success else "Failed to copy. Pyperclip missing.")
+                break
+            elif sel == 1:
+                export_dir = "collections/mte-mids"
+                os.makedirs(export_dir, exist_ok=True)
+                base_name = os.path.basename(filepath)
+                out_file = os.path.join(export_dir, os.path.splitext(base_name)[0] + ".txt")
+                with open(out_file, "w", encoding="utf-8") as f: f.write(seq_str)
+                self.announce(f"Exported to {out_file}")
+                break
 
     def open_step_sequencer(self):
         m = menu.menu()
@@ -953,7 +983,7 @@ class MusicTrackerEditor:
             if sel == -1 or sel == len(actions) - 1: break
 
             if sel == 0: self.marker_start_ms = self.cursor_ms; self.announce(f"Start: {format_time(self.marker_start_ms)}")
-            elif sel == 1: self.marker_end_ms = self.cursor_ms; self.announce(f"End: {format_time(self.marker_end_ms)}")
+            elif sel == 1: self.marker_end_ms = self.cursor_ms; self.announce(f"End: {format_time(self.cursor_ms)}, {abs(self.marker_end_ms - self.marker_start_ms)} ms")
             elif sel == 2: self.marker_start_ms, self.marker_end_ms = 0, self.current_track.get_length_ms(); self.announce("Selected all")
             elif sel == 3: self.trigger_undo()
             elif sel == 4: self.trigger_redo()

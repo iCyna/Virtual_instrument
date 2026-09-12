@@ -7,4 +7,5 @@ YAMAHADX7Piano.sf2
 COLLECTIONS/mte-mids/*
 SF3
 dist
-pyaudiogaming/git
+pyaudiogaming/.git
+.github
