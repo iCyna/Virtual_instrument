@@ -1,10 +1,3 @@
-# -*- coding: utf-8 -*-
-"""
-Music Tracker Editor (MTE)
-Integrated Audio Tracker, Sequencer & Arranger for instrument-virtual gaming toolkit
-Interface Language: English
-"""
-
 import os
 import sys
 import struct
@@ -36,7 +29,6 @@ from pyaudiogaming.sound_pool import sound, musical
 from pyaudiogaming import sound_pool
 from pyaudiogaming.sound_lib.instrument import MIDIStream
 
-# Audio PCM Standards: 44.1 kHz, 16-bit Little-Endian Stereo
 SAMPLE_RATE = 44100
 CHANNELS = 2
 SAMPLE_WIDTH = 2
@@ -111,7 +103,7 @@ def mix_pcm_buffers(base_data, overlay_data, offset_bytes=0, overlay_volume=1.0)
             np.clip(mixed, -32768, 32767, out=mixed)
             base_data[offset_bytes : offset_bytes + valid_len] = mixed.astype(np.int16).tobytes()
             return
-        except Exception as e:
+        except Exception:
             pass
 
     import array
@@ -124,7 +116,6 @@ def mix_pcm_buffers(base_data, overlay_data, offset_bytes=0, overlay_volume=1.0)
 
 def parse_single_note(note_str, inst_type):
     note_str = note_str.strip().upper()
-    # Mọi nhạc cụ có chữ "drum" đều được đối xử như bộ gõ (nhập số thay vì nốt nhạc)
     if "drum" in inst_type:
         return int(note_str) if note_str.isdigit() else -1
         
@@ -221,11 +212,9 @@ def parse_sequence_to_events(seq_str, inst_type, bpm):
     events.sort(key=lambda x: x[0])
     return events, max_time
 
-# =============================================================================
-# LAZY RENDERING TASK
-# =============================================================================
+
 class BackgroundMixerTask(threading.Thread):
-    def __init__(self, app, track, offset_bytes, events, total_time_ms, inst_type, sf2_path):
+    def __init__(self, app, track, offset_bytes, events, total_time_ms, inst_type):
         super().__init__()
         self.app = app
         self.track = track
@@ -233,30 +222,36 @@ class BackgroundMixerTask(threading.Thread):
         self.events = events
         self.total_time_ms = total_time_ms
         self.inst_type = inst_type
-        self.sf2_path = sf2_path
-        self.daemon = True 
+        self.daemon = True
 
     def run(self):
         try:
-            inst = musical()
-            inst.handle = MIDIStream(channels=16, decode=True)
-            inst.freq = SAMPLE_RATE
-            
-            if self.sf2_path and os.path.exists(self.sf2_path):
-                with font_load_lock:
-                    loaded_font = inst.load_font(self.sf2_path)
-                inst.set_fonts(loaded_font)
-            
-            # Gán bộ gõ vào Channel 9
+            inst_config = core.config["instruments"].get(self.inst_type)
+            if not inst_config:
+                return
+
+            is_vst = (inst_config["active_engine"] == "vst" and bool(inst_config["vst_path"]) and os.path.exists(inst_config["vst_path"]))
             chan = 9 if "drum" in self.inst_type else 0
-            
-            # Khớp quy ước đặt tên để kéo chuẩn xác ID từ core.config
-            id_key = f"{self.inst_type} tools" if self.inst_type in ["guitar", "bass"] else self.inst_type
-            program_id = core.config.get(id_key, 0)
-            
-            # Gửi lệnh đổi tiếng (Dù là trống ở kênh 9 vẫn gửi để hỗ trợ chuyển kit nếu cần)
-            inst.send_event(chan, 2, int(program_id))
-            
+
+            if is_vst:
+                from pyaudiogaming.sound_pool import vst
+                inst = vst()
+                inst.create_instrument(inst_config["vst_path"], frequency=SAMPLE_RATE)
+                if inst_config.get("vst_chunk"):
+                    inst.set_chunk(inst_config["vst_chunk"])
+            else:
+                from pyaudiogaming.sound_pool import musical
+                inst = musical()
+                inst.handle = MIDIStream(channels=16, decode=True)
+                inst.freq = SAMPLE_RATE
+                sf2_path = inst_config.get("sf2_path", "")
+                if sf2_path and os.path.exists(sf2_path):
+                    with font_load_lock:
+                        loaded_font = inst.load_font(sf2_path)
+                    inst.set_fonts(loaded_font)
+                program_id = inst_config.get("sf2_id", 0)
+                inst.send_event(chan, 2, int(program_id))
+
             event_idx = 0
             num_events = len(self.events)
             
@@ -264,7 +259,7 @@ class BackgroundMixerTask(threading.Thread):
             total_bytes -= (total_bytes % BYTES_PER_FRAME)
             
             current_bytes = 0
-            CHUNK_BYTES = ms_to_bytes(100) 
+            CHUNK_BYTES = ms_to_bytes(100)
             
             while current_bytes < total_bytes:
                 while event_idx < num_events:
@@ -272,7 +267,11 @@ class BackgroundMixerTask(threading.Thread):
                     if ev_bytes <= current_bytes:
                         ev = self.events[event_idx]
                         param = ev[2] | (ev[3] << 8) if ev[1] == "on" else ev[2] | (0 << 8)
-                        inst.send_event(chan, 1, param)
+                        
+                        if is_vst:
+                            inst.send_midi(chan, 1, param)
+                        else:
+                            inst.send_event(chan, 1, param)
                         event_idx += 1
                     else:
                         break
@@ -295,15 +294,20 @@ class BackgroundMixerTask(threading.Thread):
                 if self.app.is_playing:
                     play_pos_ms = self.app.cursor_ms
                     if self.app.preview:
-                        try: play_pos_ms = self.app.play_start_pos + self.app.preview.position
-                        except: pass
+                        try:
+                            play_pos_ms = self.app.play_start_pos + self.app.preview.position
+                        except:
+                            pass
                         
                     render_pos_global_ms = bytes_to_ms(self.offset_bytes + current_bytes)
                     dist = play_pos_ms - render_pos_global_ms
                     
-                    if dist > 0: time.sleep(0)
-                    elif dist > -1500: time.sleep(0.002)
-                    else: time.sleep(0.02)
+                    if dist > 0:
+                        time.sleep(0)
+                    elif dist > -1500:
+                        time.sleep(0.002)
+                    else:
+                        time.sleep(0.02)
                 else:
                     time.sleep(0.015)
                     
@@ -312,14 +316,12 @@ class BackgroundMixerTask(threading.Thread):
                 from pyaudiogaming import buffer
                 if inst.sound_token in buffer.hSound_poolbuffers:
                     del buffer.hSound_poolbuffers[inst.sound_token]
-            except Exception: pass
+            except Exception:
+                pass
             
         except Exception as e:
             print(f"Background render error: {e}")
 
-# =============================================================================
-# Live Playback Thread
-# =============================================================================
 class PlaybackThread(threading.Thread):
     def __init__(self, app, all_tracks=True):
         super().__init__()
@@ -766,7 +768,6 @@ class MusicTrackerEditor:
                 
             result = []
             
-            # --- AUTO NORMALIZE TIMBRE (MAX 95 FOR FORTE) ---
             max_v = max((n['vel'] for n in notes), default=1)
             vol_multiplier = 95.0 / max_v if max_v > 0 else 1.0
                 
@@ -864,8 +865,6 @@ class MusicTrackerEditor:
             return
             
         total_time_ms = seq_time + 500
-        sf2_path = core.config.get(f"{inst_type} musical toolkit", "")
-        
         self.save_state()
         
         total_bytes = ms_to_bytes(total_time_ms)
@@ -877,7 +876,7 @@ class MusicTrackerEditor:
         if len(self.current_track.pcm) < req_len:
             self.current_track.pcm.extend(b"\x00" * (req_len - len(self.current_track.pcm)))
             
-        task = BackgroundMixerTask(self, self.current_track, offset_bytes, events, total_time_ms, inst_type, sf2_path)
+        task = BackgroundMixerTask(self, self.current_track, offset_bytes, events, total_time_ms, inst_type)
         task.start()
         
         self.announce("Sequence rendering in background. You can play or seek immediately.")
@@ -911,7 +910,7 @@ class MusicTrackerEditor:
         self.active_track_idx = len(self.tracks) - 1
         self.cursor_ms = 0
         
-        task = BackgroundMixerTask(self, metro, 0, events, total_time_ms, "drum", core.config.get("drum musical toolkit", ""))
+        task = BackgroundMixerTask(self, metro, 0, events, total_time_ms, "drum")
         task.start()
         
         self.announce(f"{metro.name} generated. Rendering in background.")

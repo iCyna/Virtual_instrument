@@ -11,20 +11,64 @@ encoder=None
 config={
 	"input device": -1,
 	"output device": -1,
-	"guitar musical toolkit": system.match("sf2toolkit/Acoustic Guitars JNv2.4.sf2"),
-	"piano musical toolkit": system.match("sf2toolkit/GeneralUserGS-v1471.sf2"),
-	"drum musical toolkit": system.match("sf2toolkit/GeneralUserGS-v1471.sf2"),
-	"bass musical toolkit": system.match("sf2toolkit/GeneralUserGS-v1471.sf2"),
-	"electronic drum musical toolkit": system.match("sf2toolkit/GeneralUserGS-v1471.sf2"),
-	"strings musical toolkit": system.match("sf2toolkit/Strings.sf2"), # Thêm Strings,
-	"synth musical toolkit": system.match("sf2toolkit/Synth.sf2"),     # Thêm Synth
-	"flute musical toolkit": system.match("sf2toolkit/Flute.sf2"),     # Thêm Sáo,
-	"bass tools": 32,
-	"electronic drum": 0,
-	"strings": 48,
-"synth": 81,
-	"flute": 73,
-	"guitar tools": 3,
+	"instruments": {
+		"piano": {
+			"active_engine": "sf2",
+			"sf2_path": system.match("sf2toolkit/GeneralUserGS-v1471.sf2"),
+			"sf2_id": 0,
+			"vst_path": "",
+			"vst_chunk": ""
+		},
+		"guitar": {
+			"active_engine": "sf2",
+			"sf2_path": system.match("sf2toolkit/Acoustic Guitars JNv2.4.sf2"),
+			"sf2_id": 3,
+			"vst_path": "",
+			"vst_chunk": ""
+		},
+		"drum": {
+			"active_engine": "sf2",
+			"sf2_path": system.match("sf2toolkit/GeneralUserGS-v1471.sf2"),
+			"sf2_id": 0,
+			"vst_path": "",
+			"vst_chunk": ""
+		},
+		"bass": {
+			"active_engine": "sf2",
+			"sf2_path": system.match("sf2toolkit/GeneralUserGS-v1471.sf2"),
+			"sf2_id": 32,
+			"vst_path": "",
+			"vst_chunk": ""
+		},
+		"electronic drum": {
+			"active_engine": "sf2",
+			"sf2_path": system.match("sf2toolkit/GeneralUserGS-v1471.sf2"),
+			"sf2_id": 0,
+			"vst_path": "",
+			"vst_chunk": ""
+		},
+		"strings": {
+			"active_engine": "sf2",
+			"sf2_path": system.match("sf2toolkit/Strings.sf2"),
+			"sf2_id": 48,
+			"vst_path": "",
+			"vst_chunk": ""
+		},
+		"synth": {
+			"active_engine": "sf2",
+			"sf2_path": system.match("sf2toolkit/Synth.sf2"),
+			"sf2_id": 81,
+			"vst_path": "",
+			"vst_chunk": ""
+		},
+		"flute": {
+			"active_engine": "sf2",
+			"sf2_path": system.match("sf2toolkit/Flute.sf2"),
+			"sf2_id": 73,
+			"vst_path": "",
+			"vst_chunk": ""
+		}
+	}
 }
 
 def save():
@@ -33,11 +77,15 @@ def save():
 	f=pf.File(password="config key", encode=True, aes=True)
 	config["input device"]=input.device
 	config["output device"] = output.device
+	once=False
 	while 1:
+		frame.frameUpdate()
 		try:
 			f.save(config, "settings.tl", mode="wb+", type="json")
 			break
-		except:continue
+		except Exception as e:
+			if not once: print(e); once=True
+			continue
 
 def exit():
 	sys.exit
