@@ -16,13 +16,14 @@ source.dir = .
 source.include_exts = py,png,jpg,kv,atlas,ttf,so,mid,midi
 
 # (list) List of directory to exclude
-source.exclude_dirs = tests, bin, venv
+source.exclude_dirs = tests, bin, venv, vsSpace, dist, sf3, instrument-virtual.zip, build, bin, __pycache__, .github, .git, pyaudiogaming/lib
 
 # (str) Application versioning
 version = 0.1
 
 # (list) Application requirements (Đã dọn sạch đồ Windows, thêm numpy, mido)
-requirements = python3,pygame,plyer,requests,urllib3,cryptography,numpy,mido
+#requirements = python3, pygame, plyer, requests, urllib3, openssl, cffi, cryptography, mido
+requirements = python3, pygame-ce, plyer, requests, urllib3, openssl, cffi, mido
 
 # (list) Supported orientations
 orientation = portrait
@@ -30,17 +31,13 @@ orientation = portrait
 # (bool) Indicate if the application should be fullscreen or not
 fullscreen = 0
 
-# (int) Target Android API
 android.api = 33
-
-# (int) Minimum API your APK will support
 android.minapi = 24
-
-# (str) Android NDK version to use
-android.ndk = 23b
-
+android.ndk = 25b
+android.ndk_api = 24
+android.build_tools_version = 33.0.2
 # (list) The Android archs to build for
-android.archs = arm64-v8a, armeabi-v7a
+android.archs = arm64-v8a
 
 # (bool) enables Android auto backup feature
 android.allow_backup = True
@@ -50,8 +47,9 @@ android.debug_artifact = apk
 
 # --- PHẦN QUAN TRỌNG CHO UN4SEEN (Thư viện .so) ---
 # Bạn hãy chắc chắn đường dẫn này khớp với thư mục thực tế trong máy bạn:
-android.add_libs_arm64_v8a = pyaudiogaming/lib/aarch64/*.so
-android.add_libs_armeabi_v7a = pyaudiogaming/lib/armeabi-v7a/*.so
+android.add_libs_arm64_v8a = pyaudiogaming/lib/arm64-v8a/*.so
+
+android.accept_sdk_license = True
 
 [buildozer]
 

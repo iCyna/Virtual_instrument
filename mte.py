@@ -238,7 +238,7 @@ class BackgroundMixerTask(threading.Thread):
                 inst = vst()
                 success = inst.create_instrument(inst_config["vst_path"], frequency=SAMPLE_RATE, flags=0x200000)
                 if not success:
-                    self.app.announce("Lỗi: Không thể nạp VST. Đảm bảo DLL tương thích kiến trúc.")
+                    self.app.announce("Error: Cannot load VST. Ensure DLL is architecture compatible.")
                     return
                 if inst_config.get("vst_chunk"):
                     inst.set_chunk(inst_config["vst_chunk"])

@@ -1,0 +1,10 @@
+services:
+  buildozer:
+    image: kivy/buildozer
+    volumes:
+      - .:/home/user/hostcwd
+      - buildozer_cache:/home/user/.buildozer
+    command: android debug
+
+volumes:
+  buildozer_cache:

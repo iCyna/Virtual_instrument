@@ -8,3 +8,10 @@ COLLECTIONS/mte-mids/*
 SF3
 dist
 pyaudiogaming/.git
+pyaudiogaming/basses
+pyaudiogaming/un4seen.py
+desktop.ini
+.buildozer_cache
+.buildozer
+bin
+*.tl
