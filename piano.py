@@ -58,7 +58,7 @@ def run():
     piano = musical()
     piano.create_empty_stream(channels=16)
 
-    mfont = piano.load_font(core.config.get("piano musical toolkit", "piano.sf2"))
+    mfont = piano.load_font(core.config["instruments"]["piano"]["sf2_path"])
     piano.set_fonts(mfont)
     piano.play()
 
