@@ -81,6 +81,8 @@ class LivePreviewSynth:
         self.inst = None
         self.is_vst = False
         self.chan = 9 if "drum" in inst_type else 0
+        self._note_lock = threading.Lock()
+        self._active_notes = {}
         self._init_engine()
 
     def _init_engine(self):
@@ -113,23 +115,34 @@ class LivePreviewSynth:
             return
         actual_dur = dur_ms * gate_ratio * (1.8 if pedal else 1.0)
 
+        # Send complete chords before returning to the timeline scheduler.
+        # An older note-off must not silence a newer/longer overlapping voice
+        # of the same pitch (including unisons shared by the two clefs).
+        notes = list(dict.fromkeys(n for n in midi_notes if 0 <= n <= 127))
+        with self._note_lock:
+            for n in notes:
+                self._send_note(n, velocity)
+                self._active_notes[n] = self._active_notes.get(n, 0) + 1
+
         def _worker():
-            try:
-                for n in midi_notes:
-                    if n < 0: continue
-                    param = n | (velocity << 8)
-                    if self.is_vst: self.inst.send_midi(self.chan, 1, param)
-                    else: self.inst.send_event(self.chan, 1, param)
-                time.sleep(min(3.5, max(0.04, actual_dur / 1000.0)))
-                for n in midi_notes:
-                    if n < 0: continue
-                    param = n | (0 << 8)
-                    if self.is_vst: self.inst.send_midi(self.chan, 1, param)
-                    else: self.inst.send_event(self.chan, 1, param)
-            except Exception:
-                pass
+            time.sleep(max(0.001, actual_dur / 1000.0))
+            with self._note_lock:
+                for n in notes:
+                    remaining = self._active_notes.get(n, 0) - 1
+                    if remaining > 0:
+                        self._active_notes[n] = remaining
+                    elif n in self._active_notes:
+                        del self._active_notes[n]
+                        self._send_note(n, 0)
 
         threading.Thread(target=_worker, daemon=True).start()
+
+    def _send_note(self, note, velocity):
+        param = int(note) | (int(velocity) << 8)
+        if self.is_vst:
+            self.inst.send_midi(self.chan, 1, param)
+        else:
+            self.inst.send_event(self.chan, 1, param)
 
     def play_style_pattern(self, root_midi, is_minor, total_dur_ms, style_idx, pedal=False):
         style_name, pattern_data, gate_default = LH_STYLES[style_idx]
@@ -151,11 +164,15 @@ class LivePreviewSynth:
         threading.Thread(target=_pat_worker, daemon=True).start()
 
     def close(self):
-        if self.inst:
-            try:
-                self.inst.close()
-            except Exception:
-                pass
+        with self._note_lock:
+            if self.inst:
+                for n in self._active_notes:
+                    self._send_note(n, 0)
+                self._active_notes.clear()
+                try:
+                    self.inst.close()
+                finally:
+                    self.inst = None
 
 
 class ImportModeState:
@@ -195,6 +212,8 @@ class ImportModeState:
         self.slide_note_over_key_time = False
         # Semitone transpose applied to newly entered notes while no selection is active.
         self.input_pitch_offset = 0
+        self.clefs = ['treble', 'bass']
+        self.active_clef = 'treble'
 
 
 class ImportModeEditor:
@@ -205,6 +224,8 @@ class ImportModeEditor:
         if not hasattr(self.track, "import_state") or self.track.import_state is None:
             self.track.import_state = ImportModeState("piano")
         self.st = self.track.import_state
+        if not hasattr(self.st, 'clefs'): self.st.clefs = ['treble', 'bass']
+        if not hasattr(self.st, 'active_clef'): self.st.active_clef = 'treble'
         # Ensure backward compatibility if old state exists
         if not hasattr(self.st, "clipboard"): self.st.clipboard = []
         if not hasattr(self.st, "shift_attaches_lh"): self.st.shift_attaches_lh = True
@@ -216,6 +237,48 @@ class ImportModeEditor:
 
     def announce(self, text):
         self.app.announce(text)
+
+    def switch_clef(self, direction):
+        index = self.st.clefs.index(self.st.active_clef)
+        self.st.active_clef = self.st.clefs[(index + direction) % len(self.st.clefs)]
+        self.announce({'treble': 'Khóa Sol', 'alto': 'Khóa Đô', 'bass': 'Khóa Fa'}[self.st.active_clef])
+
+    def add_clef(self):
+        chooser = menu.menu()
+        chooser.init(self.w, 'Chọn khóa nhạc')
+        options = [('treble', 'Khóa Sol'), ('alto', 'Khóa Đô'), ('bass', 'Khóa Fa')]
+        for _, name in options:
+            chooser.append(name)
+        chooser.open()
+        while True:
+            self.w.frameUpdate()
+            selected = chooser.frameUpdate()
+            if selected is None: continue
+            if selected == -1: return
+            clef, name = options[selected]
+            if clef not in self.st.clefs:
+                self.st.clefs.append(clef)
+            self.st.active_clef = clef
+            self.announce(name)
+            return
+
+    def clef_notes(self, item):
+        # Older steps store the two hands without an explicit clef.
+        if 'clef_notes' in item:
+            return item['clef_notes'].get(self.st.active_clef, [])
+        key = 'lh_notes' if self.st.active_clef == 'bass' else 'notes'
+        assigned = item.get('clef', 'treble')
+        return item.get(key, []) if key == 'lh_notes' or assigned == self.st.active_clef else []
+
+    def navigate_clef(self, direction):
+        index = self.st.cursor + direction
+        while 0 <= index < len(self.st.items):
+            if self.clef_notes(self.st.items[index]) or self.st.items[index].get('rest_clef') == self.st.active_clef:
+                self.st.cursor = index
+                self.speak_current()
+                return
+            index += direction
+        self.announce('Không còn nốt trong khóa này')
 
     def get_effective_beats(self, base_beats=None, triplet=None, dotted=None):
         b = base_beats if base_beats is not None else self.st.current_beats
@@ -232,6 +295,8 @@ class ImportModeEditor:
 
     def get_bar_beat_position(self, idx):
         """Calculate Bar and Beat number (1-indexed) for any step index"""
+        if idx < len(self.st.items) and 'score_position' in self.st.items[idx]:
+            return self.st.items[idx]['score_position']
         total_beats = sum(it['beats'] for it in self.st.items[:min(idx, len(self.st.items))])
         bar_num = int(total_beats // self.app.time_sig) + 1
         beat_in_bar = round((total_beats % self.app.time_sig) + 1, 2)
@@ -254,6 +319,8 @@ class ImportModeEditor:
             parts.append("Rest")
             
         dur_str = item.get('dur_name', 'Quarter')
+        if 'score_duration' in item:
+            dur_str += f", {item['score_duration']:g} beats"
         if item.get('triplet'): dur_str += " triplet"
         if item.get('dotted'): dur_str += " dotted"
         
@@ -267,9 +334,11 @@ class ImportModeEditor:
 
     def play_item_preview(self, item):
         beat_ms = (60.0 / self.app.bpm) * 1000.0
-        dur_ms = int(item['beats'] * beat_ms)
+        dur_ms = item.get('preview_ms', int(item['beats'] * beat_ms))
         style_idx = item.get('style_idx', self.st.lh_style_idx)
         _, pattern_data, gate_ratio = LH_STYLES[style_idx]
+        if 'preview_ms' in item:
+            gate_ratio = 1.0
 
         # 1. Play Right-Hand Melody / Chords
         if item.get('notes'):
@@ -302,6 +371,11 @@ class ImportModeEditor:
             self.announce(f"End ({len(self.st.items)} steps, Bar {bar_n} Beat {beat_n})")
             return
         item = self.st.items[self.st.cursor]
+        selected_notes = self.clef_notes(item)
+        if not selected_notes and item.get('rest_clef') != self.st.active_clef:
+            self.announce('Không có nốt trong khóa này')
+            return
+        item = dict(item, notes=selected_notes, lh_notes=[])
         if item.get('notes'):
             self.st.last_preview_midi = item['notes'][-1]
         elif item.get('lh_notes'):
@@ -398,8 +472,9 @@ class ImportModeEditor:
                         notes_list = [n_val]
 
             new_it = {
-                'notes': notes_list,
-                'lh_notes': [],
+                'clef': self.st.active_clef,
+                'notes': [] if self.st.active_clef == 'bass' else notes_list,
+                'lh_notes': notes_list if self.st.active_clef == 'bass' else [],
                 'beats': b_val,
                 'dur_name': dur_label,
                 'pedal': self.st.pedal,
@@ -590,6 +665,10 @@ class ImportModeEditor:
             return str(m_val) if "drum" in self.st.inst_type else f"{NAMES[m_val % 12]}{(m_val // 12) - 1}"
 
         for it in self.st.items:
+            if 'start_ms' in it:
+                for n_m in it.get('notes', []) + it.get('lh_notes', []):
+                    tokens.append(f"{midi_str(n_m)}@{it['start_ms']}-{it['preview_ms']}-{it.get('velocity', 90)}")
+                continue
             step_dur_ms = it['beats'] * beat_ms
             style_idx = it.get('style_idx', self.st.lh_style_idx)
             _, pattern_data, gate_default = LH_STYLES[style_idx]
@@ -697,27 +776,45 @@ class ImportModeEditor:
             self.announce("Empty")
             return
 
-        self.is_playing_seq = True
-        # Space always plays the complete imported song from its beginning.
-        start_idx = 0
-        self.st.cursor = 0
+        if self.st.cursor >= len(self.st.items):
+            self.announce("End. Move to a note to play.")
+            return
         beat_ms = (60.0 / self.app.bpm) * 1000.0
+        timeline = []
+        next_ms = 0
+        for i, it in enumerate(self.st.items):
+            onset = it.get('start_ms', next_ms)
+            duration = it.get('preview_ms', it['beats'] * beat_ms)
+            timeline.append((i, onset, duration, dict(it)))
+            next_ms = onset + duration
+        origin_ms = timeline[self.st.cursor][1]
+        # Include every clef at this time, plus the remaining portion of
+        # notes already sounding when playback starts in the middle.
+        scheduled = []
+        for i, onset, duration, item in timeline:
+            if onset + duration <= origin_ms and onset < origin_ms:
+                continue
+            if onset < origin_ms:
+                duration -= origin_ms - onset
+                item['preview_ms'] = duration
+            scheduled.append((i, max(0, onset - origin_ms), duration, item))
+        self.is_playing_seq = True
         self.announce("Playing")
 
         def _seq_player():
-            for i in range(start_idx, len(self.st.items)):
+            started = time.monotonic()
+            end_ms = 0
+            for i, onset, dur_ms, it in scheduled:
+                while self.is_playing_seq and (time.monotonic() - started) * 1000 < onset:
+                    time.sleep(0.005)
                 if not self.is_playing_seq:
                     break
-                self.st.cursor = i
-                it = self.st.items[i]
-                dur_ms = int(it['beats'] * beat_ms)
+                if timeline[i][1] >= origin_ms:
+                    self.st.cursor = i
                 self.play_item_preview(it)
-                
-                slept = 0
-                step = 20
-                while slept < dur_ms and self.is_playing_seq:
-                    time.sleep(step / 1000.0)
-                    slept += step
+                end_ms = max(end_ms, onset + dur_ms)
+            while self.is_playing_seq and (time.monotonic() - started) * 1000 < end_ms:
+                time.sleep(0.005)
             self.is_playing_seq = False
 
         threading.Thread(target=_seq_player, daemon=True).start()
@@ -726,9 +823,11 @@ class ImportModeEditor:
         self.announce(
             f"Import Mode: {self.track.name} ({self.st.inst_type.title()}). "
             f"Right octave {self.st.oct_right}, Left {self.st.oct_left}. "
+            "Alt+Up/Down: clef. Alt+K: add/select clef. Left/Right: notes in clef. "
             "Shift+Note attaches simultaneous Left Hand. Press H for Bar Chords, I for Quick Phrase."
         )
 
+        self.speak_current()
         while True:
             self.w.frameUpdate()
             if self.w.keyPressed("exit"):
@@ -740,6 +839,12 @@ class ImportModeEditor:
             ctrl = self.w.keyPressing("lcontrol") or self.w.keyPressing("rcontrol")
             shift = self.w.keyPressing("lshift") or self.w.keyPressing("rshift")
             alt = self.w.keyPressing("lalt") or self.w.keyPressing("ralt")
+            if alt and self.w.keyPressed('k'):
+                self.add_clef()
+                continue
+            if alt and (self.w.keyPressed('up') or self.w.keyPressed('down')):
+                self.switch_clef(-1 if self.w.keyPressed('up') else 1)
+                continue
 
             # Ctrl+Space toggles pitch-edit selection versus future-note pitch setup.
             if ctrl and self.w.keyPressed("space"):
@@ -922,8 +1027,8 @@ class ImportModeEditor:
             # Note input: C, D, E, F, G, A, B
             for n_char, semi in NOTE_BASE.items():
                 if self.w.keyPressed(n_char) and not ctrl:
-                    hand = 'L' if shift else 'R'
-                    octv = self.st.oct_left if shift else self.st.oct_right
+                    hand = 'L' if shift or self.st.active_clef == 'bass' else 'R'
+                    octv = self.st.oct_left if hand == 'L' else self.st.oct_right
 
                     # Pitch arrows set this offset when no note/region is selected.
                     # It persists for subsequent input until changed again.
@@ -960,7 +1065,7 @@ class ImportModeEditor:
                             target['style_idx'] = self.st.lh_style_idx
                             self.play_item_preview(target)
                             self.announce(self.format_item_speech(target, target_idx))
-                        elif (self.st.chord_mode or alt) and self.st.items and self.st.cursor > 0:
+                        elif (self.st.chord_mode or alt) and self.st.items and self.st.cursor > 0 and self.st.items[min(self.st.cursor, len(self.st.items) - 1)].get('clef', 'treble') == self.st.active_clef:
                             target_idx = self.st.cursor - 1 if self.st.cursor >= len(self.st.items) else self.st.cursor
                             target = self.st.items[target_idx]
                             if midi_val not in target['notes']:
@@ -970,6 +1075,7 @@ class ImportModeEditor:
                             self.announce(self.format_item_speech(target, target_idx))
                         else:
                             new_item = {
+                                'clef': self.st.active_clef,
                                 'notes': [] if hand == 'L' else [midi_val],
                                 'lh_notes': [midi_val] if hand == 'L' else [],
                                 'beats': eff_beats,
@@ -999,8 +1105,7 @@ class ImportModeEditor:
                     if not self.st.items:
                         self.announce("Empty")
                     else:
-                        self.st.cursor = max(0, min(len(self.st.items), self.st.cursor + direction))
-                        self.speak_current()
+                        self.navigate_clef(direction)
                 continue
 
             # Up / Down: semitone pitch change; Shift+Up/Down: octave (12 semitones).

@@ -361,7 +361,7 @@ class MusicTrackerEditor(PlayerModeMixin):
         m.init(self.w, "Arranger & Instrument Studio")
         m.append("Advanced Step Sequencer (Notes/Chords)")
         m.append("Metronome Beat Generator")
-        m.append("Extract MIDI to Sequence Text (.mid)")
+        m.append("Import MIDI / MusicXML (.mid, .mxl) — Play or Import Mode")
         m.append("Launch Live MIDI Instruments")
         m.append("Back")
         m.open()
@@ -434,8 +434,10 @@ class MusicTrackerEditor(PlayerModeMixin):
         editor = ImportModeEditor(self, self.current_track)
         editor.run()
 
-    def run_step_sequencer(self, inst_type, from_file=False):
-        if from_file:
+    def run_step_sequencer(self, inst_type, from_file=False, sequence=None):
+        if sequence is not None:
+            seq_str = sequence
+        elif from_file:
             filepath = kbt(None, "Load Sequence File", "Enter path or choose .txt file:", "", file_dialog=True)
             if not filepath or not os.path.exists(filepath):
                 self.announce("File not found.")
@@ -543,12 +545,29 @@ class MusicTrackerEditor(PlayerModeMixin):
             break
 
     def extract_midi_to_string(self):
-        if not HAS_MIDO:
-            self.announce("Missing library. Please install: pip install mido")
-            return
-            
-        filepath = kbt(None, "Select MIDI File", "Choose a .mid file:", "", file_dialog=True)
+        filepath = kbt(None, "Select Music File", "Choose .mid, .mxl, .musicxml or .xml:", "", file_dialog=True)
         if not filepath or not os.path.exists(filepath):
+            return
+
+        is_xml = os.path.splitext(filepath)[1].lower() in ('.mxl', '.musicxml', '.xml')
+        xml_output = 'input'
+        if is_xml:
+            modes = menu.menu()
+            modes.init(self.w, 'MusicXML Output')
+            for label in ('Open in Input Mode', 'Convert to text (copy / export / play)', 'Cancel'):
+                modes.append(label)
+            modes.open()
+            while True:
+                self.w.frameUpdate()
+                selected = modes.frameUpdate()
+                if selected is None:
+                    continue
+                if selected in (-1, 2):
+                    return
+                xml_output = 'input' if selected == 0 else 'text'
+                break
+        if not is_xml and not HAS_MIDO:
+            self.announce('Missing library. Please install: pip install mido')
             return
 
         m = menu.menu()
@@ -556,10 +575,11 @@ class MusicTrackerEditor(PlayerModeMixin):
         m.append("Pitched Instruments (Piano/Guitar/Bass/Strings/Synth...)")
         m.append("Drums / Electronic Drums")
         m.append("Cancel")
-        m.open()
+        if not is_xml:
+            m.open()
         
-        inst_choice = None
-        while True:
+        inst_choice = 'piano' if is_xml else None
+        while not is_xml:
             self.w.frameUpdate()
             sel = m.frameUpdate()
             if sel is None: continue
@@ -567,16 +587,30 @@ class MusicTrackerEditor(PlayerModeMixin):
             inst_choice = "drum" if sel == 1 else "piano"
             break
             
-        self.announce("Extracting MIDI. Tracking timing, pedal, and scaling timbre to Forte...")
+        self.announce('Reading MusicXML...' if is_xml else "Extracting MIDI. Tracking timing, pedal, and scaling timbre to Forte...")
         
         extraction_done = False
         extracted_seq_str = ""
         extraction_error = False
         shared_progress = 0  
+        extracted_score = None
+        imported_items = None
+        error_message = ''
       
         def extraction_worker():
             nonlocal extraction_done, extracted_seq_str, extraction_error, shared_progress
+            nonlocal extracted_score, imported_items, error_message
             try:
+                if is_xml:
+                    from mte_musicxml import load_score, score_to_import_items, score_to_sequence
+                    extracted_score = load_score(filepath)
+                    if xml_output == 'input':
+                        imported_items = score_to_import_items(extracted_score)
+                    else:
+                        extracted_seq_str = score_to_sequence(extracted_score)
+                    shared_progress = 100
+                    extraction_done = True
+                    return
                 mid = mido.MidiFile(filepath)
                 notes = []
                 
@@ -647,6 +681,7 @@ class MusicTrackerEditor(PlayerModeMixin):
                 extraction_done = True
             except Exception as e:
                 print(e)
+                error_message = str(e)
                 extraction_error = True
                 extraction_done = True
 
@@ -662,14 +697,33 @@ class MusicTrackerEditor(PlayerModeMixin):
             time.sleep(0.01)
                    
         if extraction_error:
-            self.announce("Error extracting MIDI")
+            self.announce('Error importing music: ' + error_message)
+            return
+
+        if is_xml and xml_output == 'input':
+            if not imported_items:
+                self.announce('No notes or rests found')
+                return
+            from mte_importmode import ImportModeState
+            state = ImportModeState('piano')
+            state.items = imported_items
+            for item in imported_items:
+                if item['clef'] not in state.clefs:
+                    state.clefs.append(item['clef'])
+            state.active_clef = imported_items[0]['clef']
+            self.current_track.import_state = state
+            self.open_import_mode()
             return
 
         seq_str = extracted_seq_str
+        if not seq_str:
+            self.announce('No playable notes found')
+            return
         m2 = menu.menu()
         m2.init(self.w, "Extraction Complete")
         m2.append("Copy to Clipboard")
         m2.append("Export to collections/mte-mids")
+        m2.append("Load into current track for playback")
         m2.append("Discard")
         m2.open()
         
@@ -677,7 +731,10 @@ class MusicTrackerEditor(PlayerModeMixin):
             self.w.frameUpdate()
             sel = m2.frameUpdate()
             if sel is None: continue
-            if sel == -1 or sel == 2: break
+            if sel == -1 or sel == 3: break
+            if sel == 2:
+                self.run_step_sequencer(inst_choice, sequence=seq_str)
+                break
             if sel == 0:
                 success = set_clipboard_text(seq_str)
                 self.announce("Copied to clipboard!" if success else "Failed to copy. Pyperclip missing.")
