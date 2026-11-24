@@ -1,5 +1,5 @@
 import core
-from pyaudiogaming.sound_pool import musical
+from audio_instruments import musical
 import setting
 import recorder
 
@@ -45,13 +45,11 @@ PERCUSSION_KEYS = {
 
 def run():
     w = core.getW()
-    drums = musical()
-    drums.create_empty_stream(channels=16)
-
-    # Load SoundFont bộ trống / kèn của bạn
-    mfont = drums.load_font(core.config["drum musical toolkit"])
-    drums.set_fonts(mfont) 
-    drums.play()
+    try:
+        drums = core.open_live_instrument(core.config, 'drum')
+    except Exception as error:
+        w.say(str(error))
+        return
 
     active_notes = {}
     octave_shift = 0
@@ -61,7 +59,14 @@ def run():
     while 1:
         w.frameUpdate() 
         recorder.mainloop(drums, w)
-        if w.keyPressed("exit"): break
+        if w.keyPressed("exit"):
+            if core.recording:
+                if core.recorder:
+                    core.recorder.close()
+                    core.recorder = None
+                core.recording = False
+            drums.close()
+            break
         
         # Điều chỉnh quãng tám (chỉ áp dụng cho Kèn/Brass)
         if w.keyPressed("page_up") or w.keyPressed("ralt"):

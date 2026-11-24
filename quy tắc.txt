@@ -1,0 +1,3 @@
+Quy tắc vàng đọc yêu cầu phân tích khi nào tôi đồng ý mới tiếp tục viết code (thực hiện coder vào)
+LƯU Ý K ĐỂ BIẾN TẠM LÀ _ VÌ NÓ SẼ XUNG ĐỘT VỚI HỆ THỐNG DỊCH 
+lưu ý: code gọn, giao diện tiếng anh, biến tạm nên viết trên 1 dòng, cho tôi kèm kết quả.txt ngắn gọn chi tiết nhất.

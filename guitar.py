@@ -1,5 +1,5 @@
 import core
-from pyaudiogaming.sound_pool import musical
+from audio_instruments import musical
 from pyaudiogaming.timer import Timer
 import setting
 import random
@@ -115,15 +115,11 @@ def stop_note(guitar, chan, note):
 
 def run():
     w = core.getW()
-    guitar = musical()
-    guitar.create_empty_stream(channels=16)
-
-    mfont = guitar.load_font(core.config["guitar musical toolkit"])
-    guitar.set_fonts(mfont) 
-    guitar.play()
-
-    guitar_program = core.config.get("guitar tools", 3)
-    set_program(guitar, chan=0, program_id=guitar_program)
+    try:
+        guitar = core.open_live_instrument(core.config, 'guitar')
+    except Exception as error:
+        w.say(str(error))
+        return
 
     current_root = 48         
     current_type_idx = 0      
@@ -156,7 +152,9 @@ def run():
 
     while 1:
         w.frameUpdate() 
-        if w.keyPressed("exit"): break
+        if w.keyPressed("exit"):
+            guitar.close()
+            break
 
         for key, root_note in ROOT_KEYS.items():
             if w.keyPressed(key):

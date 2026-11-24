@@ -6,12 +6,29 @@ import threading
 import core
 from pyaudiogaming import menu
 from pyaudiogaming.inputBox import kbt
-from pyaudiogaming.sound_pool import musical
-from pyaudiogaming.sound_lib.instrument import MIDIStream
+from audio_instruments import musical
 
 SAMPLE_RATE = 44100
 NAMES = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B']
 NOTE_BASE = {'c': 0, 'd': 2, 'e': 4, 'f': 5, 'g': 7, 'a': 9, 'b': 11}
+
+
+def item_playback_events(item):
+    """Keep written notes separate from their realized ornaments and ties."""
+    pitches = item.get('notes', []) + item.get('lh_notes', [])
+    original = item.get('notation_notes', [])
+    shifts = {n - old for n, old in zip(pitches, original)}
+    if ('playback_events' in item and len(pitches) == len(original)
+            and len(shifts) <= 1):
+        shift = next(iter(shifts), 0)
+        original_beats = item.get('notation_beats', 0)
+        scale = item['beats'] / original_beats if original_beats else 1
+        return [dict(event, notes=[max(0, min(127, n + shift)) for n in event['notes']],
+                     offset_ms=event['offset_ms'] * scale,
+                     duration_ms=event['duration_ms'] * scale)
+                for event in item['playback_events']]
+    return [dict(notes=pitches, offset_ms=0,
+                 duration_ms=item['preview_ms'], velocity=item.get('velocity', 90))] if pitches else []
 
 DURATION_MAP = {
     "1": (4.0, "Whole"),
@@ -22,11 +39,11 @@ DURATION_MAP = {
     "6": (0.125, "32nd"),
 }
 
-# 14 Left-Hand Accompaniment & Articulation Styles (Alt + M)
+# Left-Hand Accompaniment & Articulation Styles (Alt + M)
 LH_STYLES = [
     ("Non-Legato (Standard 85%)", "articulation", 0.85),
-    ("Legato (Smooth Connected 105%)", "articulation", 1.05),
-    ("Staccato (Short Crisp 35%)", "articulation", 0.35),
+    ("Legato (Smooth Connected 110%)", "articulation", 1.10),
+    ("Staccato (Short Crisp 40%)", "articulation", 0.40),
     ("Ballad Sustain (Root-5th-8ve Block)", [([0, 7, 12], 1.0, 1.3, 0.9)], 1.2),
     # 5 Asian Piano Styles
     ("Asian Pop Ballad (1-5-8-5 Arpeggio)", [([0], 0.25, 1.2, 0.95), ([7], 0.25, 1.2, 0.8), ([12], 0.25, 1.2, 0.85), ([7], 0.25, 1.2, 0.75)], 1.2),
@@ -40,6 +57,7 @@ LH_STYLES = [
     ("Romantic Nocturne (Chopin Wide Spread)", [([0], 0.2, 1.4, 0.95), ([7], 0.2, 1.4, 0.75), ([12], 0.2, 1.4, 0.8), ([16], 0.2, 1.4, 0.85), ([12], 0.2, 1.4, 0.75)], 1.4),
     ("European Bossa / Lounge (Syncopated)", [([0], 0.375, 1.0, 0.95), ([4, 7, 11], 0.25, 0.6, 0.8), ([7], 0.375, 1.0, 0.85)], 0.9),
     ("Euro Boogie / Swing (Walking Shuffle)", [([0, 7], 0.34, 0.7, 0.95), ([0, 9], 0.16, 0.6, 0.8), ([0, 7], 0.34, 0.7, 0.9), ([0, 9], 0.16, 0.6, 0.8)], 0.75),
+    ("Staccatissimo (Very Short 20%)", "articulation", 0.20),
 ]
 
 CHORD_INTERVALS = {
@@ -86,29 +104,15 @@ class LivePreviewSynth:
         self._init_engine()
 
     def _init_engine(self):
-        inst_config = core.config["instruments"].get(self.inst_type)
-        if not inst_config:
-            return
-        self.is_vst = (inst_config["active_engine"] == "vst" and bool(inst_config["vst_path"]) and os.path.exists(inst_config["vst_path"]))
+        self.is_vst = core.vst_supported() and core.config['instruments'][self.inst_type].get('active_engine') in ('vst', 'vst3')
         try:
-            if self.is_vst:
-                from pyaudiogaming.sound_pool import vst
-                self.inst = vst()
-                if self.inst.create_instrument(inst_config["vst_path"], frequency=SAMPLE_RATE):
-                    if inst_config.get("vst_chunk"):
-                        self.inst.set_chunk(inst_config["vst_chunk"])
-                    self.inst.play()
-            else:
-                self.inst = musical()
-                self.inst.open()
-                sf2_path = inst_config.get("sf2_path", "")
-                if sf2_path and os.path.exists(sf2_path):
-                    loaded_font = self.inst.load_font(sf2_path)
-                    self.inst.set_fonts(loaded_font)
-                program_id = inst_config.get("sf2_id", 0)
-                self.inst.send_event(self.chan, 2, int(program_id))
+            self.inst = core.open_live_instrument(core.config, self.inst_type)
         except Exception as e:
+            self.inst = None
             print(f"Preview synth error: {e}")
+            window = core.getW()
+            if window:
+                window.say(f"Could not load {self.inst_type}: {e}")
 
     def play_notes(self, midi_notes, dur_ms=300, velocity=100, pedal=False, gate_ratio=1.0):
         if not self.inst or not midi_notes:
@@ -210,10 +214,13 @@ class ImportModeState:
         self.sel_end = None
         self.velocity = 100
         self.slide_note_over_key_time = False
-        # Semitone transpose applied to newly entered notes while no selection is active.
+        self.key_tonic = "C"
+        self.key_mode = "Major"
+        # One-shot adjustment for the next entered note.
         self.input_pitch_offset = 0
         self.clefs = ['treble', 'bass']
         self.active_clef = 'treble'
+        self.active_lane = None
 
 
 class ImportModeEditor:
@@ -239,14 +246,20 @@ class ImportModeEditor:
         self.app.announce(text)
 
     def switch_clef(self, direction):
+        self.st.active_lane = None
+        self._vertical_context = None
         index = self.st.clefs.index(self.st.active_clef)
         self.st.active_clef = self.st.clefs[(index + direction) % len(self.st.clefs)]
-        self.announce({'treble': 'Khóa Sol', 'alto': 'Khóa Đô', 'bass': 'Khóa Fa'}[self.st.active_clef])
+        if any('notation_clef' in item for item in self.st.items):
+            label = {'treble': 'Upper staff', 'bass': 'Lower staff', 'alto': 'Alto clef'}
+        else:
+            label = {'treble': 'Treble clef', 'alto': 'Alto clef', 'bass': 'Bass clef'}
+        self.announce(label[self.st.active_clef])
 
     def add_clef(self):
         chooser = menu.menu()
-        chooser.init(self.w, 'Chọn khóa nhạc')
-        options = [('treble', 'Khóa Sol'), ('alto', 'Khóa Đô'), ('bass', 'Khóa Fa')]
+        chooser.init(self.w, 'Select clef')
+        options = [('treble', 'Treble clef'), ('alto', 'Alto clef'), ('bass', 'Bass clef')]
         for _, name in options:
             chooser.append(name)
         chooser.open()
@@ -259,6 +272,8 @@ class ImportModeEditor:
             if clef not in self.st.clefs:
                 self.st.clefs.append(clef)
             self.st.active_clef = clef
+            self.st.active_lane = None
+            self._vertical_context = None
             self.announce(name)
             return
 
@@ -271,14 +286,171 @@ class ImportModeEditor:
         return item.get(key, []) if key == 'lh_notes' or assigned == self.st.active_clef else []
 
     def navigate_clef(self, direction):
+        from score_navigation import lane
+        self._vertical_context = None
+        if self.st.cursor == len(self.st.items) and (direction > 0 or not self.st.items):
+            self.speak_current()
+            return
         index = self.st.cursor + direction
+        selected_lane = getattr(self.st, 'active_lane', None)
         while 0 <= index < len(self.st.items):
-            if self.clef_notes(self.st.items[index]) or self.st.items[index].get('rest_clef') == self.st.active_clef:
+            candidate = self.st.items[index]
+            in_lane = selected_lane is None or tuple(selected_lane) == lane(candidate)
+            if in_lane and (self.clef_notes(candidate) or candidate.get('rest_clef') == self.st.active_clef):
                 self.st.cursor = index
                 self.speak_current()
                 return
             index += direction
-        self.announce('Không còn nốt trong khóa này')
+        if (0 <= self.st.cursor < len(self.st.items)
+                and (self.clef_notes(self.st.items[self.st.cursor])
+                     or self.st.items[self.st.cursor].get('rest_clef') == self.st.active_clef)):
+            if direction > 0:
+                self.st.cursor = len(self.st.items)
+            self.speak_current()
+        else:
+            self.announce('No more notes in this clef')
+
+    def navigate_vertical(self, direction):
+        from score_navigation import vertical_notes, lane
+        if not 0 <= self.st.cursor < len(self.st.items):
+            self.announce('No note at the cursor')
+            return
+        current = self.st.items[self.st.cursor]
+        if 'score_offset' not in current:
+            self.switch_clef(direction)
+            self.speak_current()
+            return
+        previous = getattr(self, '_vertical_context', None)
+        anchor = previous[0] if previous and previous[1] == self.st.cursor else current['score_offset']
+        rows = vertical_notes(self.st.items, anchor)
+        if not rows:
+            return
+        if previous and previous[1] == self.st.cursor and previous[3] == rows:
+            position = (previous[2] + direction) % len(rows)
+        else:
+            positions = [i for i, (index, _) in enumerate(rows) if index == self.st.cursor]
+            position = (positions[0] if direction > 0 else positions[-1]) if positions else 0
+        index, pitch = rows[position]
+        item = self.st.items[index]
+        self.st.cursor = index
+        self.st.active_clef = item.get('clef', 'treble')
+        self.st.active_lane = list(lane(item))
+        self._vertical_context = (anchor, index, position, rows)
+        name = 'Rest' if pitch is None else item.get('pitch_names', {}).get(pitch, self.midi_to_name(pitch))
+        self.announce(f"{item.get('staff_name', self.st.active_clef)}, voice {item.get('voice_id', '1')}, "
+                      f"{name}, {position + 1} of {len(rows)}")
+        if pitch is not None:
+            self.synth.play_notes([pitch], 350, velocity=item.get('velocity', self.st.velocity), gate_ratio=1.0)
+
+    def read_chord_note(self, direction):
+        """Inspect one pitch without moving or editing the score cursor."""
+        if not 0 <= self.st.cursor < len(self.st.items):
+            self.announce('No note at the cursor')
+            return
+        item = self.st.items[self.st.cursor]
+        pitches = sorted(set(self.clef_notes(item)))
+        if not pitches:
+            self.announce('Rest, no chord notes')
+            return
+        context = (id(item), self.st.active_clef, tuple(pitches))
+        if getattr(self, '_chord_context', None) != context:
+            index = 0 if direction > 0 else len(pitches) - 1
+        else:
+            index = max(0, min(len(pitches) - 1, self._chord_note_index + direction))
+        self._chord_context = context
+        self._chord_note_index = index
+        pitch = pitches[index]
+        name = item.get('pitch_names', {}).get(pitch, self.midi_to_name(pitch))
+        self.announce(f'{name}, note {index + 1} of {len(pitches)}')
+        self.synth.play_notes([pitch], 350, velocity=item.get('velocity', self.st.velocity), gate_ratio=1.0)
+
+    def delete_current(self):
+        from score_navigation import lane
+
+        if self.st.lock_writing:
+            self.announce('Writing locked')
+            return
+        idx = self.st.cursor
+        if idx == len(self.st.items):
+            selected_lane = getattr(self.st, 'active_lane', None)
+            for idx in range(len(self.st.items) - 1, -1, -1):
+                candidate = self.st.items[idx]
+                if (self.clef_notes(candidate)
+                        and (selected_lane is None or tuple(selected_lane) == lane(candidate))):
+                    break
+            else:
+                self.announce('No previous note in this clef or voice')
+                return
+        if not 0 <= idx < len(self.st.items):
+            self.announce('No note at cursor')
+            return
+        item = self.st.items[idx]
+        if not self.clef_notes(item):
+            self.announce('No notes in this clef')
+            return
+        removed = dict(item, notes=list(self.clef_notes(item)), lh_notes=[])
+        if 'clef_notes' in item:
+            item['clef_notes'][self.st.active_clef] = []
+        key = 'lh_notes' if self.st.active_clef == 'bass' else 'notes'
+        item[key] = []
+        item.setdefault('deleted_clefs', []).append(self.st.active_clef)
+        item['rest_clef'] = self.st.active_clef
+        item['chord_tag'] = None
+        self.st.cursor = idx
+        self._vertical_context = None
+        self.st.sel_start = self.st.sel_end = None
+        self.announce(f'Deleted {self.format_item_speech(removed)}')
+
+    def insert_item(self, item):
+        """Fill a deleted slot without shifting the following notes."""
+        item.setdefault("velocity", self.st.velocity)
+        idx = self.st.cursor
+        if 0 <= idx < len(self.st.items):
+            target = self.st.items[idx]
+            if self.st.active_clef in target.get('deleted_clefs', []):
+                notes = self.clef_notes(item)
+                key = 'lh_notes' if self.st.active_clef == 'bass' else 'notes'
+                target[key] = list(notes)
+                if 'clef_notes' in target:
+                    target['clef_notes'][self.st.active_clef] = list(notes)
+                target['deleted_clefs'].remove(self.st.active_clef)
+                if notes:
+                    target.pop('rest_clef', None)
+                self.st.cursor += 1
+                return target
+        self.st.items.insert(idx, item)
+        self.st.cursor += 1
+        return item
+
+    def change_duration(self, duration=None, toggle=None):
+        idx = self.st.cursor
+        if not 0 <= idx < len(self.st.items):
+            if duration:
+                self.st.current_beats, self.st.current_dur_name = duration
+            elif toggle == 'triplet':
+                self.st.is_triplet = not self.st.is_triplet
+            elif toggle == 'dotted':
+                self.st.is_dotted = not self.st.is_dotted
+            return
+        if self.st.lock_writing:
+            self.announce('Writing locked')
+            return
+        item = self.st.items[idx]
+        if not self.clef_notes(item) and item.get('rest_clef') != self.st.active_clef:
+            self.announce('No notes in this clef')
+            return
+        old_beats = item['beats']
+        factor = (2 / 3 if item.get('triplet') else 1) * (1.5 if item.get('dotted') else 1)
+        base = old_beats / factor if old_beats else 0.25
+        if duration:
+            base, item['dur_name'] = duration
+        if toggle:
+            item[toggle] = not item.get(toggle, False)
+        item['beats'] = self.get_effective_beats(base, item.get('triplet', False), item.get('dotted', False))
+        if 'preview_ms' in item and old_beats:
+            item['preview_ms'] *= item['beats'] / old_beats
+        if 'score_duration' in item:
+            item['score_duration'] = item['beats']
 
     def get_effective_beats(self, base_beats=None, triplet=None, dotted=None):
         b = base_beats if base_beats is not None else self.st.current_beats
@@ -297,9 +469,13 @@ class ImportModeEditor:
         """Calculate Bar and Beat number (1-indexed) for any step index"""
         if idx < len(self.st.items) and 'score_position' in self.st.items[idx]:
             return self.st.items[idx]['score_position']
+        if self.st.items and 'score_position' in self.st.items[-1]:
+            last = self.st.items[-1]
+            bar, beat = last['score_position']
+            return bar, beat + last['beats']
         total_beats = sum(it['beats'] for it in self.st.items[:min(idx, len(self.st.items))])
         bar_num = int(total_beats // self.app.time_sig) + 1
-        beat_in_bar = round((total_beats % self.app.time_sig) + 1, 2)
+        beat_in_bar = round((total_beats % self.app.time_sig) * getattr(self.app, "time_sig_denominator", 4) / 4 + 1, 2)
         if beat_in_bar == int(beat_in_bar):
             beat_in_bar = int(beat_in_bar)
         return bar_num, beat_in_bar
@@ -310,9 +486,9 @@ class ImportModeEditor:
         
         parts = []
         if rh:
-            parts.append(" ".join(self.midi_to_name(n) for n in rh))
+            parts.append(" ".join(item.get('pitch_names', {}).get(n, self.midi_to_name(n)) for n in rh))
         if lh:
-            parts.append("LH " + " ".join(self.midi_to_name(n) for n in lh))
+            parts.append("LH " + " ".join(item.get('pitch_names', {}).get(n, self.midi_to_name(n)) for n in lh))
         if item.get('chord_tag'):
             parts.append(f"Chord {item['chord_tag']}")
         if not parts:
@@ -323,6 +499,12 @@ class ImportModeEditor:
             dur_str += f", {item['score_duration']:g} beats"
         if item.get('triplet'): dur_str += " triplet"
         if item.get('dotted'): dur_str += " dotted"
+        if item.get('grace'): dur_str += ', grace note'
+        if item.get('notation_marks'): dur_str += ', ' + ', '.join(item['notation_marks'])
+        if 'lh_notes' in item and item.get('notation_clef'):
+            dur_str += ', ' + ('lower staff' if item.get('clef') == 'bass' else 'upper staff')
+        if item.get('notation_clef'):
+            dur_str += ', ' + {'treble': 'Treble clef', 'bass': 'Bass clef', 'alto': 'Alto clef'}[item['notation_clef']]
         
         pos_str = ""
         if idx is not None:
@@ -333,6 +515,25 @@ class ImportModeEditor:
         return f"{' + '.join(parts)}, {dur_str}{pedal_str}{pos_str}"
 
     def play_item_preview(self, item):
+        if 'playback_events' in item:
+            events = item_playback_events(item)
+            if not self.is_playing_seq:
+                self._preview_generation = getattr(self, '_preview_generation', 0) + 1
+            generation = getattr(self, '_preview_generation', 0)
+
+            def play_realized():
+                started = time.monotonic()
+                for event in sorted(events, key=lambda e: e['offset_ms']):
+                    while (time.monotonic() - started) * 1000 < event['offset_ms']:
+                        if generation != getattr(self, '_preview_generation', 0):
+                            return
+                        time.sleep(0.005)
+                    if generation != getattr(self, '_preview_generation', 0):
+                        return
+                    self.synth.play_notes(event['notes'], event['duration_ms'],
+                                          velocity=event['velocity'], gate_ratio=1.0)
+            threading.Thread(target=play_realized, daemon=True).start()
+            return
         beat_ms = (60.0 / self.app.bpm) * 1000.0
         dur_ms = item.get('preview_ms', int(item['beats'] * beat_ms))
         style_idx = item.get('style_idx', self.st.lh_style_idx)
@@ -342,7 +543,7 @@ class ImportModeEditor:
 
         # 1. Play Right-Hand Melody / Chords
         if item.get('notes'):
-            self.synth.play_notes(item['notes'], dur_ms, velocity=getattr(self.st, "velocity", 100), pedal=item.get('pedal', False), gate_ratio=gate_ratio)
+            self.synth.play_notes(item['notes'], dur_ms, velocity=item.get("velocity", self.st.velocity), pedal=item.get('pedal', False), gate_ratio=gate_ratio)
 
         # 2. Play Simultaneous Left-Hand Notes / Pattern
         lh = item.get('lh_notes', [])
@@ -350,7 +551,7 @@ class ImportModeEditor:
             if pattern_data != "articulation" and "drum" not in self.st.inst_type:
                 self.synth.play_style_pattern(lh[0], False, dur_ms, style_idx, pedal=item.get('pedal', False))
             else:
-                self.synth.play_notes(lh, dur_ms, velocity=90, pedal=item.get('pedal', False), gate_ratio=gate_ratio)
+                self.synth.play_notes(lh, dur_ms, velocity=item.get("velocity", 90), pedal=item.get('pedal', False), gate_ratio=gate_ratio)
 
         # 3. Play Simultaneous Section Chord if assigned
         if item.get('chord_tag') and "drum" not in self.st.inst_type:
@@ -360,20 +561,17 @@ class ImportModeEditor:
                 if pattern_data != "articulation":
                     self.synth.play_style_pattern(root_m, is_min, dur_ms, style_idx, pedal=True)
                 else:
-                    self.synth.play_notes(c_notes, dur_ms, velocity=85, pedal=item.get('pedal', False), gate_ratio=gate_ratio)
+                    self.synth.play_notes(c_notes, dur_ms, velocity=item.get("velocity", 85), pedal=item.get('pedal', False), gate_ratio=gate_ratio)
 
     def speak_current(self):
-        if not self.st.items:
-            self.announce("Empty")
-            return
         if self.st.cursor >= len(self.st.items):
             bar_n, beat_n = self.get_bar_beat_position(len(self.st.items))
-            self.announce(f"End ({len(self.st.items)} steps, Bar {bar_n} Beat {beat_n})")
+            self.announce(f"Virtual rest, end of score, Bar {bar_n} Beat {beat_n}")
             return
         item = self.st.items[self.st.cursor]
         selected_notes = self.clef_notes(item)
         if not selected_notes and item.get('rest_clef') != self.st.active_clef:
-            self.announce('Không có nốt trong khóa này')
+            self.announce('No notes in this clef')
             return
         item = dict(item, notes=selected_notes, lh_notes=[])
         if item.get('notes'):
@@ -381,9 +579,16 @@ class ImportModeEditor:
         elif item.get('lh_notes'):
             self.st.last_preview_midi = item['lh_notes'][-1]
         self.play_item_preview(item)
-        self.announce(self.format_item_speech(item, self.st.cursor))
+        text = self.format_item_speech(item, self.st.cursor)
+        if item.get('voice_id') is not None:
+            text = f"{item.get('staff_name', self.st.active_clef)}, voice {item['voice_id']}. {text}"
+        self.announce(text)
 
     def get_item_time_ms(self, idx):
+        if idx < len(self.st.items) and 'start_ms' in self.st.items[idx]:
+            return self.st.items[idx]['start_ms']
+        if self.st.items and all('start_ms' in it for it in self.st.items):
+            return max(it['start_ms'] + it['preview_ms'] for it in self.st.items)
         beat_ms = (60.0 / self.app.bpm) * 1000.0
         t = 0.0
         for i in range(min(idx, len(self.st.items))):
@@ -397,11 +602,22 @@ class ImportModeEditor:
         beat_ms = (60.0 / self.app.bpm) * 1000.0
         cur_ms = self.get_item_time_ms(self.st.cursor)
         target_ms = max(0.0, cur_ms + delta_beats * beat_ms)
+        self._vertical_context = None
+        selected_lane = getattr(self.st, 'active_lane', None)
+        if selected_lane is not None:
+            from score_navigation import lane
+            candidates = [i for i, it in enumerate(self.st.items) if lane(it) == tuple(selected_lane)]
+            if candidates:
+                self.st.cursor = next((i for i in candidates
+                                       if self.get_item_time_ms(i) >= target_ms - 5), candidates[-1])
+                self.speak_current()
+            return
         
         acc = 0.0
         new_idx = len(self.st.items) - 1
         for i, it in enumerate(self.st.items):
-            if acc >= target_ms - 5:
+            onset = it.get('start_ms', acc)
+            if onset >= target_ms - 5:
                 new_idx = i
                 break
             acc += it['beats'] * beat_ms
@@ -422,6 +638,20 @@ class ImportModeEditor:
         if not ans or not ans.strip().isdigit():
             return
         target_bar = max(1, int(ans.strip()))
+        if all('score_position' in it for it in self.st.items):
+            from score_navigation import lane
+            self._vertical_context = None
+            selected_lane = getattr(self.st, 'active_lane', None)
+            candidates = [i for i, it in enumerate(self.st.items)
+                          if it['score_position'][0] >= target_bar
+                          and (selected_lane is None or lane(it) == tuple(selected_lane))
+                          and (self.clef_notes(it) or it.get('rest_clef') == self.st.active_clef)]
+            if candidates:
+                self.st.cursor = candidates[0]
+                self.speak_current()
+            else:
+                self.announce('Bar not found in this staff')
+            return
         target_beats = (target_bar - 1) * self.app.time_sig
         
         acc_beats = 0.0
@@ -483,68 +713,51 @@ class ImportModeEditor:
                 'style_idx': self.st.lh_style_idx,
                 'chord_tag': None
             }
-            self.st.items.insert(self.st.cursor, new_it)
-            self.st.cursor += 1
+            self.insert_item(new_it)
             added += 1
 
         self.announce(f"Inserted {added} steps.")
 
-    def toggle_pitch_target(self):
-        """Ctrl+Space: toggle between editing the cursor note and future-note pitch setup."""
-        if self.st.sel_start is not None and self.st.sel_end is not None:
-            self.st.sel_start = self.st.sel_end = None
-            self.announce(
-                f"Selection cleared. New notes transpose: {self.st.input_pitch_offset:+d} semitones"
-            )
-            return
-
-        if not self.st.items or self.st.cursor >= len(self.st.items):
-            self.announce("No note at cursor. Arrows will set pitch for new notes.")
-            return
-
-        self.st.sel_start = self.st.sel_end = self.st.cursor
-        item = self.st.items[self.st.cursor]
-        notes = item.get("notes", []) + item.get("lh_notes", [])
-        if notes:
-            self.st.last_preview_midi = notes[-1]
-        self.announce(f"Selected step {self.st.cursor + 1} for pitch editing")
-
     def adjust_pitch(self, semitones):
-        """Arrows transpose the selected steps, or set the transpose for future notes."""
-        if self.st.lock_writing:
-            self.announce("Writing locked")
-            return
+        """Adjust only the next note, without changing existing score notes."""
+        self.st.input_pitch_offset = max(-127, min(127, self.st.input_pitch_offset + semitones))
+        self.announce(f"Next note {self.st.input_pitch_offset:+d} semitones; then return to key")
 
-        has_selection = self.st.sel_start is not None and self.st.sel_end is not None
-        if not has_selection:
-            self.st.input_pitch_offset = max(-127, min(127, self.st.input_pitch_offset + semitones))
-            self.announce(
-                f"New-note pitch offset {self.st.input_pitch_offset:+d} semitones "
-                f"({self.st.input_pitch_offset / 12:+.1f} octaves)"
-            )
-            return
+    def input_note_pitch(self, letter, octave):
+        tonic = getattr(self.st, 'key_tonic', 'C')
+        mode = getattr(self.st, 'key_mode', 'Major')
+        intervals = {'Major': [0, 2, 4, 5, 7, 9, 11],
+                     'Minor': [0, 2, 3, 5, 7, 8, 10],
+                     '7 (Mixolydian)': [0, 2, 4, 5, 7, 9, 10]}[mode]
+        letters = 'cdefgab'
+        degree = (letters.index(letter) - letters.index(tonic[0].lower())) % 7
+        root = NOTE_BASE[tonic[0].lower()] + (1 if '#' in tonic else -1 if 'b' in tonic else 0)
+        target = (root + intervals[degree]) % 12
+        accidental = (target - NOTE_BASE[letter] + 6) % 12 - 6
+        pitch = 12 + octave * 12 + NOTE_BASE[letter] + accidental + self.st.input_pitch_offset
+        self.st.input_pitch_offset = 0
+        return max(0, min(127, pitch))
 
-        start = max(0, min(self.st.sel_start, self.st.sel_end))
-        end = min(len(self.st.items) - 1, max(self.st.sel_start, self.st.sel_end))
-        changed = 0
-        for idx in range(start, end + 1):
-            item = self.st.items[idx]
-            for key in ("notes", "lh_notes"):
-                if key in item:
-                    old_notes = item.get(key, [])
-                    item[key] = [max(0, min(127, n + semitones)) for n in old_notes]
-                    changed += len(old_notes)
-        if changed:
-            item = self.st.items[min(max(self.st.cursor, start), end)]
-            notes = item.get("notes", []) or item.get("lh_notes", [])
-            if notes:
-                self.st.last_preview_midi = notes[-1]
-            self.play_item_preview(item)
-            self.announce(
-                f"Transposed steps {start + 1}-{end + 1} by {semitones:+d} semitones"
-            )
-        else:
-            self.announce("Selected steps contain no pitched notes")
+    def open_key_menu(self):
+        def choose(title, options):
+            chooser = menu.menu()
+            chooser.init(self.w, title)
+            for option in options:
+                chooser.append(option)
+            chooser.open()
+            while True:
+                self.w.frameUpdate()
+                selected = chooser.frameUpdate()
+                if selected is None: continue
+                return None if selected == -1 else options[selected]
+        tonic = choose("Key tonic", ['C', 'C#', 'Db', 'D', 'Eb', 'E', 'F', 'F#', 'Gb', 'G', 'Ab', 'A', 'Bb', 'B'])
+        if tonic is None: return False
+        mode = choose("Key type", ['Major', 'Minor', '7 (Mixolydian)'])
+        if mode is None: return False
+        self.st.key_tonic, self.st.key_mode = tonic, mode
+        self.st.input_pitch_offset = 0
+        self.announce(f"Key {tonic} {mode}")
+        return True
 
     def copy_selection(self):
         if not self.st.items:
@@ -589,6 +802,61 @@ class ImportModeEditor:
         self.copy_selection()
         self.paste_clipboard()
 
+    def open_rhythm_menu(self):
+        signatures = [(2, 4), (3, 4), (4, 4), (6, 4), (2, 8), (3, 8), (6, 8)]
+        chooser = menu.menu()
+        chooser.init(self.w, "Time signature and tempo (quarter-note BPM)")
+        for numerator, denominator in signatures:
+            chooser.append(f"{numerator}/{denominator}")
+        chooser.open()
+        while True:
+            self.w.frameUpdate()
+            selected = chooser.frameUpdate()
+            if selected is None: continue
+            if selected == -1: return False
+            numerator, denominator = signatures[selected]
+            answer = kbt(None, "Tempo", "Quarter-note BPM (20 to 400):", str(self.app.bpm))
+            if answer is None or not answer.strip(): return False
+            try:
+                bpm = float(answer)
+                if not 20 <= bpm <= 400: raise ValueError
+            except ValueError:
+                self.announce("BPM must be a number from 20 to 400")
+                continue
+            if not self.open_key_menu(): return False
+            self.app.bpm = bpm
+            self.app.time_sig_numerator = numerator
+            self.app.time_sig_denominator = denominator
+            self.app.time_sig = numerator * 4 / denominator
+            self.announce(f"Time signature {numerator}/{denominator}, {bpm:g} quarter-note BPM")
+            return True
+
+    def open_dynamics_menu(self):
+        options = [('ppp', 16), ('pp', 33), ('p', 49), ('mp', 64),
+                   ('mf', 80), ('f', 96), ('ff', 112), ('fff', 127)]
+        chooser = menu.menu()
+        chooser.init(self.w, "Dynamics")
+        for name, velocity in options:
+            chooser.append(f"{name}, velocity {velocity}")
+        chooser.open()
+        while True:
+            self.w.frameUpdate()
+            selected = chooser.frameUpdate()
+            if selected is None: continue
+            if selected == -1: return
+            name, velocity = options[selected]
+            self.st.velocity = velocity
+            if not self.st.lock_writing:
+                start = end = self.st.cursor
+                if self.st.sel_start is not None and self.st.sel_end is not None:
+                    start, end = sorted((self.st.sel_start, self.st.sel_end))
+                for item in self.st.items[max(0, start):end + 1]:
+                    item['velocity'] = velocity
+                    for event in item.get('playback_events', []):
+                        event['velocity'] = velocity
+            self.announce(f"Dynamics {name}, velocity {velocity}")
+            return
+
     def open_left_hand_style_menu(self):
         m = menu.menu()
         m.init(self.w, "Left-Hand Styles & Articulations (Alt+M)")
@@ -605,7 +873,7 @@ class ImportModeEditor:
             if sel == -1 or sel == len(LH_STYLES): break
             self.st.lh_style_idx = sel
             chosen_name = LH_STYLES[sel][0]
-            target_idx = self.st.cursor - 1 if self.st.cursor >= len(self.st.items) else self.st.cursor
+            target_idx = self.st.cursor
             if 0 <= target_idx < len(self.st.items) and not self.st.lock_writing:
                 self.st.items[target_idx]['style_idx'] = sel
             self.announce(f"Style set to {chosen_name}")
@@ -666,8 +934,10 @@ class ImportModeEditor:
 
         for it in self.st.items:
             if 'start_ms' in it:
-                for n_m in it.get('notes', []) + it.get('lh_notes', []):
-                    tokens.append(f"{midi_str(n_m)}@{it['start_ms']}-{it['preview_ms']}-{it.get('velocity', 90)}")
+                for event in item_playback_events(it):
+                    for n_m in event['notes']:
+                        onset = round(it['start_ms'] + event['offset_ms'])
+                        tokens.append(f"{midi_str(n_m)}@{onset}-{round(event['duration_ms'])}-{event['velocity']}")
                 continue
             step_dur_ms = it['beats'] * beat_ms
             style_idx = it.get('style_idx', self.st.lh_style_idx)
@@ -695,7 +965,7 @@ class ImportModeEditor:
                         sub_dur = pat_span_ms * frac
                         actual_dur = max(25, int(sub_dur * gate * pedal_mult))
                         start_t = int(round(current_ms + sub_offset))
-                        sub_vel = max(1, min(127, int(90 * v_scale)))
+                        sub_vel = max(1, min(127, int(it.get("velocity", 90) * v_scale)))
                         for off in offsets:
                             n_m = max(0, min(127, root_m + off))
                             tokens.append(f"{midi_str(n_m)}@{start_t}-{actual_dur}-{sub_vel}")
@@ -704,7 +974,7 @@ class ImportModeEditor:
                     actual_dur = max(25, int(step_dur_ms * gate_default * pedal_mult))
                     start_t = int(round(current_ms))
                     for n_m in lh_notes:
-                        tokens.append(f"{midi_str(n_m)}@{start_t}-{actual_dur}-90")
+                        tokens.append(f"{midi_str(n_m)}@{start_t}-{actual_dur}-{it.get('velocity', 90)}")
 
             # 3. Simultaneous Bar / Section Chord Progression
             if it.get('chord_tag') and "drum" not in self.st.inst_type:
@@ -718,7 +988,7 @@ class ImportModeEditor:
                             sub_dur = bar_dur_ms * frac
                             actual_dur = max(25, int(sub_dur * gate * 1.3))
                             start_t = int(round(current_ms + sub_offset))
-                            sub_vel = max(1, min(127, int(85 * v_scale)))
+                            sub_vel = max(1, min(127, int(it.get("velocity", 85) * v_scale)))
                             for off in offsets:
                                 if off in (4, 16) and is_min:
                                     off -= 1
@@ -729,7 +999,7 @@ class ImportModeEditor:
                         actual_dur = max(25, int(bar_dur_ms * gate_default * 1.2))
                         start_t = int(round(current_ms))
                         for n_m in c_notes:
-                            tokens.append(f"{midi_str(n_m)}@{start_t}-{actual_dur}-85")
+                            tokens.append(f"{midi_str(n_m)}@{start_t}-{actual_dur}-{it.get('velocity', 85)}")
 
             current_ms += step_dur_ms
 
@@ -767,6 +1037,7 @@ class ImportModeEditor:
         self.announce(f"Saved {len(self.st.items)} steps ({total_bars} bars) to {self.track.name}.")
 
     def toggle_preview_play(self):
+        self._preview_generation = getattr(self, '_preview_generation', 0) + 1
         if self.is_playing_seq:
             self.is_playing_seq = False
             bar_n, beat_n = self.get_bar_beat_position(self.st.cursor)
@@ -785,6 +1056,8 @@ class ImportModeEditor:
         for i, it in enumerate(self.st.items):
             onset = it.get('start_ms', next_ms)
             duration = it.get('preview_ms', it['beats'] * beat_ms)
+            if 'playback_events' in it:
+                duration = max([duration] + [e['offset_ms'] + e['duration_ms'] for e in item_playback_events(it)])
             timeline.append((i, onset, duration, dict(it)))
             next_ms = onset + duration
         origin_ms = timeline[self.st.cursor][1]
@@ -797,6 +1070,14 @@ class ImportModeEditor:
             if onset < origin_ms:
                 duration -= origin_ms - onset
                 item['preview_ms'] = duration
+                if 'playback_events' in item:
+                    elapsed = origin_ms - onset
+                    item['playback_events'] = [dict(e, offset_ms=max(0, e['offset_ms'] - elapsed),
+                        duration_ms=e['duration_ms'] - max(0, elapsed - e['offset_ms']))
+                        for e in item_playback_events(item)
+                        if e['offset_ms'] + e['duration_ms'] > elapsed]
+                    item['notation_beats'] = item['beats']
+                    item['notation_notes'] = item.get('notes', []) + item.get('lh_notes', [])
             scheduled.append((i, max(0, onset - origin_ms), duration, item))
         self.is_playing_seq = True
         self.announce("Playing")
@@ -823,7 +1104,9 @@ class ImportModeEditor:
         self.announce(
             f"Import Mode: {self.track.name} ({self.st.inst_type.title()}). "
             f"Right octave {self.st.oct_right}, Left {self.st.oct_left}. "
-            "Alt+Up/Down: clef. Alt+K: add/select clef. Left/Right: notes in clef. "
+            "Alt+Up/Down: read and play chord notes, voices and staves at this beat. "
+            "Alt+K: add/select clef. Left/Right: notes in selected voice. "
+            "Ctrl+Alt+Up/Down: read and play individual chord notes. "
             "Shift+Note attaches simultaneous Left Hand. Press H for Bar Chords, I for Quick Phrase."
         )
 
@@ -832,6 +1115,7 @@ class ImportModeEditor:
             self.w.frameUpdate()
             if self.w.keyPressed("exit"):
                 self.is_playing_seq = False
+                self._preview_generation = getattr(self, '_preview_generation', 0) + 1
                 self.synth.close()
                 self.announce("Exited Import Mode")
                 break
@@ -839,20 +1123,19 @@ class ImportModeEditor:
             ctrl = self.w.keyPressing("lcontrol") or self.w.keyPressing("rcontrol")
             shift = self.w.keyPressing("lshift") or self.w.keyPressing("rshift")
             alt = self.w.keyPressing("lalt") or self.w.keyPressing("ralt")
+            if ctrl and alt and (self.w.keyPressed('up') or self.w.keyPressed('down')):
+                self.read_chord_note(1 if self.w.keyPressed('up') else -1)
+                continue
             if alt and self.w.keyPressed('k'):
                 self.add_clef()
                 continue
             if alt and (self.w.keyPressed('up') or self.w.keyPressed('down')):
-                self.switch_clef(-1 if self.w.keyPressed('up') else 1)
-                continue
-
-            # Ctrl+Space toggles pitch-edit selection versus future-note pitch setup.
-            if ctrl and self.w.keyPressed("space"):
-                self.toggle_pitch_target()
+                self.navigate_vertical(-1 if self.w.keyPressed('up') else 1)
                 continue
 
             # System & Editing shortcuts: Ctrl+S, Ctrl+A, Ctrl+Q, Ctrl+E, Ctrl+C, Ctrl+X, Ctrl+V, Ctrl+D
-            if ctrl and self.w.keyPressed("s"): self.save_to_track(); continue
+            if ctrl and self.w.keyPressed("s"): self.app.save_project(); continue
+            if ctrl and self.w.keyPressed("r"): self.save_to_track(); continue
             if ctrl and self.w.keyPressed("c"): self.copy_selection(); continue
             if ctrl and self.w.keyPressed("x"): self.cut_selection(); continue
             if ctrl and self.w.keyPressed("v"): self.paste_clipboard(); continue
@@ -864,12 +1147,12 @@ class ImportModeEditor:
                 else:
                     self.announce("Empty")
                 continue
-            if ctrl and self.w.keyPressed("q"):
+            if not ctrl and not alt and self.w.keyPressed("-"):
                 self.st.sel_start = self.st.cursor
                 bar_n, beat_n = self.get_bar_beat_position(self.st.cursor)
                 self.announce(f"Start marker: Step {self.st.cursor + 1} (Bar {bar_n} Beat {beat_n})")
                 continue
-            if ctrl and self.w.keyPressed("e"):
+            if not ctrl and not alt and self.w.keyPressed("="):
                 self.st.sel_end = self.st.cursor
                 bar_n, beat_n = self.get_bar_beat_position(self.st.cursor)
                 self.announce(f"End marker: Step {self.st.cursor + 1} (Bar {bar_n} Beat {beat_n})")
@@ -890,6 +1173,10 @@ class ImportModeEditor:
             if self.w.keyPressed("end"):
                 self.st.cursor = len(self.st.items)
                 self.speak_current()
+                continue
+
+            if alt and self.w.keyPressed("d") and not ctrl:
+                self.open_dynamics_menu()
                 continue
 
             # G: Go to Bar
@@ -921,7 +1208,7 @@ class ImportModeEditor:
             # Toggle Pedal (M without Alt)
             if self.w.keyPressed("m") and not ctrl and not alt:
                 self.st.pedal = not self.st.pedal
-                target_idx = self.st.cursor - 1 if self.st.cursor >= len(self.st.items) else self.st.cursor
+                target_idx = self.st.cursor
                 if 0 <= target_idx < len(self.st.items) and not self.st.lock_writing:
                     self.st.items[target_idx]['pedal'] = self.st.pedal
                 self.announce("Pedal On" if self.st.pedal else "Pedal Off")
@@ -938,26 +1225,9 @@ class ImportModeEditor:
                 self.toggle_preview_play()
                 continue
 
-            # Backspace: Delete previous note or selection
-            if self.w.keyPressed("backspace"):
-                if self.st.lock_writing:
-                    self.announce("Writing locked")
-                    continue
-                if self.st.sel_start is not None and self.st.sel_end is not None:
-                    s, e = min(self.st.sel_start, self.st.sel_end), max(self.st.sel_start, self.st.sel_end)
-                    del self.st.items[s:e+1]
-                    self.st.cursor = min(s, len(self.st.items))
-                    self.st.sel_start = self.st.sel_end = None
-                    self.announce("Deleted selection")
-                elif self.st.items and self.st.cursor > 0:
-                    removed = self.st.items.pop(self.st.cursor - 1)
-                    self.st.cursor -= 1
-                    self.announce(f"Deleted {self.format_item_speech(removed)}")
-                elif self.st.items and self.st.cursor == 0:
-                    removed = self.st.items.pop(0)
-                    self.announce(f"Deleted {self.format_item_speech(removed)}")
-                else:
-                    self.announce("Empty")
+            # At the virtual rest, erase the preceding note for replacement.
+            if self.w.keyPressed("backspace") or self.w.keyPressed("delete"):
+                self.delete_current()
                 continue
 
             # S toggles slide/hold-length mode.
@@ -973,51 +1243,34 @@ class ImportModeEditor:
                 self.announce(f"Velocity {self.st.velocity}")
                 continue
 
-            # Duration keys: 1-6, 7 (Triplet), 8 (Dotted), 0 (Rest)
-            for d_key, (b_val, b_name) in DURATION_MAP.items():
+            # Duration edits apply to the cursor note; at End they configure input.
+            for d_key, duration in DURATION_MAP.items():
                 if self.w.keyPressed(d_key) and not ctrl and not shift:
-                    self.st.current_beats = b_val
-                    self.st.current_dur_name = b_name
-                    eff = self.get_effective_beats()
-                    target_idx = self.st.cursor - 1 if self.st.cursor >= len(self.st.items) else self.st.cursor
-                    if 0 <= target_idx < len(self.st.items) and not self.st.lock_writing:
-                        self.st.items[target_idx]['beats'] = eff
-                        self.st.items[target_idx]['dur_name'] = b_name
-                    self.announce(b_name)
+                    self.change_duration(duration=duration)
+                    self.announce(duration[1])
                     break
 
             if self.w.keyPressed("7") and not ctrl:
-                self.st.is_triplet = not self.st.is_triplet
-                target_idx = self.st.cursor - 1 if self.st.cursor >= len(self.st.items) else self.st.cursor
-                if 0 <= target_idx < len(self.st.items) and not self.st.lock_writing:
-                    self.st.items[target_idx]['triplet'] = self.st.is_triplet
-                    base_b = DURATION_MAP.get(next((k for k, v in DURATION_MAP.items() if v[1] == self.st.items[target_idx]['dur_name']), "3"))[0]
-                    self.st.items[target_idx]['beats'] = self.get_effective_beats(base_b, self.st.is_triplet, self.st.items[target_idx].get('dotted', False))
-                self.announce("Triplet On" if self.st.is_triplet else "Triplet Off")
+                self.change_duration(toggle='triplet')
+                self.speak_current()
                 continue
 
             if self.w.keyPressed("8") and not ctrl:
-                self.st.is_dotted = not self.st.is_dotted
-                target_idx = self.st.cursor - 1 if self.st.cursor >= len(self.st.items) else self.st.cursor
-                if 0 <= target_idx < len(self.st.items) and not self.st.lock_writing:
-                    self.st.items[target_idx]['dotted'] = self.st.is_dotted
-                    base_b = DURATION_MAP.get(next((k for k, v in DURATION_MAP.items() if v[1] == self.st.items[target_idx]['dur_name']), "3"))[0]
-                    self.st.items[target_idx]['beats'] = self.get_effective_beats(base_b, self.st.items[target_idx].get('triplet', False), self.st.is_dotted)
-                self.announce("Dotted On" if self.st.is_dotted else "Dotted Off")
+                self.change_duration(toggle='dotted')
+                self.speak_current()
                 continue
 
             # Key 0: Insert Rest
             if self.w.keyPressed("0") and not ctrl:
                 if not self.st.lock_writing:
                     rest_item = {
-                        'notes': [], 'lh_notes': [],
+                        'notes': [], 'lh_notes': [], 'rest_clef': self.st.active_clef,
                         'beats': self.get_effective_beats(),
                         'dur_name': self.st.current_dur_name,
                         'pedal': False, 'triplet': self.st.is_triplet, 'dotted': self.st.is_dotted,
                         'style_idx': self.st.lh_style_idx, 'chord_tag': None
                     }
-                    self.st.items.insert(self.st.cursor, rest_item)
-                    self.st.cursor += 1
+                    self.insert_item(rest_item)
                     bar_n, beat_n = self.get_bar_beat_position(self.st.cursor - 1)
                     self.announce(f"Rest, {self.st.current_dur_name}, Bar {bar_n} Beat {beat_n}")
                 else:
@@ -1030,12 +1283,7 @@ class ImportModeEditor:
                     hand = 'L' if shift or self.st.active_clef == 'bass' else 'R'
                     octv = self.st.oct_left if hand == 'L' else self.st.oct_right
 
-                    # Pitch arrows set this offset when no note/region is selected.
-                    # It persists for subsequent input until changed again.
-                    midi_val = max(
-                        0,
-                        min(127, 12 + (octv * 12) + semi + self.st.input_pitch_offset)
-                    )
+                    midi_val = self.input_note_pitch(n_char, octv)
                     self.st.last_preview_midi = midi_val
 
                     beat_ms = (60.0 / self.app.bpm) * 1000.0
@@ -1051,7 +1299,8 @@ class ImportModeEditor:
                         self.announce(f"{self.midi_to_name(midi_val)}, {self.st.current_dur_name}, {'Left' if hand == 'L' else 'Right'}")
                     else:
                         # Simultaneous Left-Hand attachment when pressing Shift+Note!
-                        if hand == 'L' and self.st.shift_attaches_lh and self.st.items:
+                        if (hand == 'L' and self.st.shift_attaches_lh and self.st.items
+                                and self.st.active_clef not in self.st.items[min(self.st.cursor, len(self.st.items) - 1)].get('deleted_clefs', [])):
                             target_idx = self.st.cursor - 1 if self.st.cursor >= len(self.st.items) else self.st.cursor
                             target = self.st.items[target_idx]
                             if 'lh_notes' not in target:
@@ -1065,7 +1314,9 @@ class ImportModeEditor:
                             target['style_idx'] = self.st.lh_style_idx
                             self.play_item_preview(target)
                             self.announce(self.format_item_speech(target, target_idx))
-                        elif (self.st.chord_mode or alt) and self.st.items and self.st.cursor > 0 and self.st.items[min(self.st.cursor, len(self.st.items) - 1)].get('clef', 'treble') == self.st.active_clef:
+                        elif ((self.st.chord_mode or alt) and self.st.items
+                              and self.st.active_clef not in self.st.items[min(self.st.cursor, len(self.st.items) - 1)].get('deleted_clefs', [])
+                              and self.st.items[min(self.st.cursor, len(self.st.items) - 1)].get('clef', 'treble') == self.st.active_clef):
                             target_idx = self.st.cursor - 1 if self.st.cursor >= len(self.st.items) else self.st.cursor
                             target = self.st.items[target_idx]
                             if midi_val not in target['notes']:
@@ -1086,8 +1337,7 @@ class ImportModeEditor:
                                 'style_idx': self.st.lh_style_idx,
                                 'chord_tag': None
                             }
-                            self.st.items.insert(self.st.cursor, new_item)
-                            self.st.cursor += 1
+                            new_item = self.insert_item(new_item)
                             self.play_item_preview(new_item)
                             self.announce(self.format_item_speech(new_item, self.st.cursor - 1))
                     break
@@ -1102,15 +1352,10 @@ class ImportModeEditor:
                 elif shift:
                     self.seek_by_beats(direction * self.app.time_sig)
                 else:
-                    if not self.st.items:
-                        self.announce("Empty")
-                    else:
-                        self.navigate_clef(direction)
+                    self.navigate_clef(direction)
                 continue
 
-            # Up / Down: semitone pitch change; Shift+Up/Down: octave (12 semitones).
-            # With a selection, transpose all notes in that selected range.
-            # Without a selection, set the persistent pitch offset for newly entered notes.
+            # One-shot next-note adjustment; Shift changes by an octave.
             if self.w.keyPressed("up") or self.w.keyPressed("down"):
                 direction = 1 if self.w.keyPressed("up") else -1
                 semitone_step = 12 if shift else 1
